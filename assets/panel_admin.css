@@ -1,0 +1,115 @@
+/* Estilo general */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f1f5f9;
+    margin: 0;
+    padding: 0;
+    color: #222;
+}
+
+/* Título principal */
+h1 {
+    text-align: center;
+    background-color: #1d4ed8;
+    color: white;
+    padding: 1rem;
+    margin: 0;
+}
+
+/* Bienvenida */
+.panel p {
+    text-align: right;
+    padding: 0.5rem 2rem;
+    font-style: italic;
+}
+
+/* Contenedor del panel */
+.panel {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 2rem;
+    padding: 2rem;
+}
+
+/* Tarjetas */
+.card {
+    background-color: white;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    padding: 1.5rem;
+    width: 300px;
+    transition: transform 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+}
+
+/* Títulos de las tarjetas */
+.card h2 {
+    margin-top: 0;
+    font-size: 1.25rem;
+    color: #1e40af;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 0.5rem;
+}
+
+/* Enlaces dentro de tarjetas */
+.card a {
+    display: block;
+    margin-top: 0.5rem;
+    text-decoration: none;
+    color: #2563eb;
+    font-weight: 500;
+}
+
+.card a:hover {
+    text-decoration: underline;
+}
+
+/* Botón de cerrar sesión */
+.logout-btn {
+    display: block;
+    margin: 2rem auto 0;
+    text-align: center;
+    width: fit-content;
+    background-color: #dc2626;
+    color: white;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: bold;
+    transition: background-color 0.2s;
+}
+
+.logout-btn:hover {
+    background-color: #b91c1c;
+}
+
+/* --------------------- */
+/* ESTILO RESPONSIVO 📱 */
+/* --------------------- */
+@media (max-width: 768px) {
+    .panel {
+        flex-direction: column;
+        align-items: center;
+        padding: 1rem;
+    }
+
+    .card {
+        width: 90%;
+    }
+
+    h1 {
+        font-size: 1.5rem;
+        padding: 1rem 0.5rem;
+    }
+
+    .logout-btn {
+        width: 90%;
+        text-align: center;
+        margin: 2rem auto;
+    }
+}
