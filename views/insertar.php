@@ -1,106 +1,156 @@
 <?php
-require_once '../includes/conexion.php';
+session_start();
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (!isset($_SESSION['usuario'])) {
+    header("Location: ../auth/login.php");
+    exit;
+}
 
-    // Capturar datos
-    $numero_orden = $_POST['numero_orden'];
-    $fecha_emision = $_POST['fecha_emision'];
-    $id_chofer = $_POST['id_chofer'];
-    $id_vehiculo = $_POST['id_vehiculo'];
-    $id_ubicacion = $_POST['id_ubicacion'];
-    $objeto_movilizacion = $_POST['objeto_movilizacion'];
-    $dias_movilizacion = $_POST['dias_movilizacion'];
-    $id_director = $_POST['id_director'];
+require_once "../includes/conexion.php";
 
-    // Generar detalle de días automáticamente
-    $diasSemana = [
-        'Domingo',
-        'Lunes',
-        'Martes',
-        'Miércoles',
-        'Jueves',
-        'Viernes',
-        'Sábado'
-    ];
+function nullIfEmpty($valor)
+{
+    return (isset($valor) && trim($valor) !== "") ? trim($valor) : null;
+}
 
-    $detalleDias = [];
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
-    $fecha = new DateTime($fecha_emision);
+    //=========================
+    // SUBIR FOTO
+    //=========================
 
-    for ($i = 0; $i < $dias_movilizacion; $i++) {
+    $nombreFoto = null;
 
-        $fechaTemp = clone $fecha;
+    if (isset($_FILES["foto"]) && $_FILES["foto"]["error"] == 0) {
 
-        if ($i > 0) {
-            $fechaTemp->modify("+$i day");
+        $permitidos = ['jpg','jpeg','png','webp'];
+
+        $extension = strtolower(pathinfo($_FILES["foto"]["name"], PATHINFO_EXTENSION));
+
+        if (in_array($extension,$permitidos)) {
+
+            if(!is_dir("../uploads/choferes")){
+                mkdir("../uploads/choferes",0777,true);
+            }
+
+            $nombreFoto = uniqid("chofer_").".".$extension;
+
+            move_uploaded_file(
+                $_FILES["foto"]["tmp_name"],
+                "../uploads/choferes/".$nombreFoto
+            );
         }
-
-        $numeroDia = $fechaTemp->format('w');
-
-        $nombreDia = $diasSemana[$numeroDia];
-
-        $detalleDias[] =
-            $nombreDia . " " .
-            $fechaTemp->format('d');
     }
-
-    $detalle_dias = implode(", ", $detalleDias);
 
     try {
 
-        $stmt = $pdo->prepare("
-            INSERT INTO ordenes_movilizacion
-            (
-                numero_orden,
-                fecha_emision,
-                id_chofer,
-                id_vehiculo,
-                id_ubicacion,
-                objeto_movilizacion,
-                dias_movilizacion,
-                detalle_dias,
-                id_director
-            )
-            VALUES
-            (
-                :numero_orden,
-                :fecha_emision,
-                :id_chofer,
-                :id_vehiculo,
-                :id_ubicacion,
-                :objeto_movilizacion,
-                :dias_movilizacion,
-                :detalle_dias,
-                :id_director
-            )
-        ");
+        $sql = "INSERT INTO choferes(
+
+            nombres,
+            apellidos,
+            cedula,
+            fecha_nacimiento,
+            direccion,
+            telefono,
+            correo,
+            numero_licencia,
+            fecha_emision_licencia,
+            fecha_caducidad_licencia,
+            cargo,
+            departamento,
+            grupo_sanguineo,
+            contacto_emergencia,
+            telefono_emergencia,
+            codigo_empleado,
+            fecha_ingreso,
+            observaciones,
+            estado,
+            tipo_licencia,
+            id_direccion,
+            foto
+
+        ) VALUES (
+
+            :nombres,
+            :apellidos,
+            :cedula,
+            :fecha_nacimiento,
+            :direccion,
+            :telefono,
+            :correo,
+            :numero_licencia,
+            :fecha_emision_licencia,
+            :fecha_caducidad_licencia,
+            :cargo,
+            :departamento,
+            :grupo_sanguineo,
+            :contacto_emergencia,
+            :telefono_emergencia,
+            :codigo_empleado,
+            :fecha_ingreso,
+            :observaciones,
+            :estado,
+            :tipo_licencia,
+            :id_direccion,
+            :foto
+
+        )";
+
+        $stmt = $pdo->prepare($sql);
 
         $stmt->execute([
-            ':numero_orden' => $numero_orden,
-            ':fecha_emision' => $fecha_emision,
-            ':id_chofer' => $id_chofer,
-            ':id_vehiculo' => $id_vehiculo,
-            ':id_ubicacion' => $id_ubicacion,
-            ':objeto_movilizacion' => $objeto_movilizacion,
-            ':dias_movilizacion' => $dias_movilizacion,
-            ':detalle_dias' => $detalle_dias,
-            ':id_director' => $id_director
+
+            ':nombres' => trim($_POST['nombres']),
+            ':apellidos' => trim($_POST['apellidos']),
+            ':cedula' => trim($_POST['cedula']),
+
+            ':fecha_nacimiento' => nullIfEmpty($_POST['fecha_nacimiento']),
+            ':direccion' => trim($_POST['direccion']),
+            ':telefono' => trim($_POST['telefono']),
+            ':correo' => trim($_POST['correo']),
+
+            ':numero_licencia' => trim($_POST['numero_licencia']),
+            ':fecha_emision_licencia' => nullIfEmpty($_POST['fecha_emision_licencia']),
+            ':fecha_caducidad_licencia' => nullIfEmpty($_POST['fecha_caducidad_licencia']),
+
+            ':cargo' => trim($_POST['cargo']),
+            ':departamento' => trim($_POST['departamento']),
+            ':grupo_sanguineo' => trim($_POST['grupo_sanguineo']),
+
+            ':contacto_emergencia' => trim($_POST['contacto_emergencia']),
+            ':telefono_emergencia' => trim($_POST['telefono_emergencia']),
+
+            ':codigo_empleado' => trim($_POST['codigo_empleado']),
+            ':fecha_ingreso' => nullIfEmpty($_POST['fecha_ingreso']),
+
+            ':observaciones' => trim($_POST['observaciones']),
+
+            ':estado' => $_POST['estado'],
+
+            ':tipo_licencia' => $_POST['tipo_licencia'],
+
+            ':id_direccion' => !empty($_POST['id_direccion']) ? $_POST['id_direccion'] : null,
+
+            ':foto' => $nombreFoto
+
         ]);
 
-        header('Location: index.php?exito=1');
-        exit();
+        header("Location:index.php?ok=1");
+        exit;
 
-    } catch(PDOException $e) {
+    } catch(PDOException $e){
 
-        echo "Error: " . $e->getMessage();
+        echo "<h3>Error al guardar el chofer</h3>";
+
+        echo "<pre>";
+        echo $e->getMessage();
+        echo "</pre>";
 
     }
 
-} else {
+}else{
 
-    header('Location:index.php');
-    exit();
+    header("Location:nuevo.php");
+    exit;
 
 }
-?>
