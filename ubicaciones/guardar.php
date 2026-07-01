@@ -1,6 +1,5 @@
 <?php
 require_once '../includes/conexion.php';
-
 try {
     $pdo->beginTransaction();
 
@@ -44,6 +43,7 @@ try {
         $parroquia = $stmt->fetch(PDO::FETCH_ASSOC);
         $id_parroquia = $parroquia ? $parroquia['id_parroquia'] : null;
         if (!$id_parroquia) {
+            // Nota: Si tu tabla 'parroquias' requiere la columna 'tipo', añádela aquí.
             $stmt = $pdo->prepare("INSERT INTO parroquias (nombre, id_ciudad) VALUES (:nombre, :id_ciudad)");
             $stmt->execute(['nombre'=>$nombre,'id_ciudad'=>$id_ciudad]);
             $id_parroquia = $pdo->lastInsertId();
@@ -68,17 +68,25 @@ try {
         $id_recinto = $_POST['id_recinto'];
     }
 
-    // PUNTO DE REFERENCIA
-    $referencia = $_POST['referencia'];
+    // CAMPOS DE LA UBICACIÓN EXTRACCIÓN (CORREGIDOS)
+    $barrio_comunidad = trim($_POST['barrio_comunidad'] ?? '');
+    $punto_referencia = trim($_POST['punto_referencia'] ?? '');
 
-    // Guardar en tabla ubicaciones
-    $stmt = $pdo->prepare("INSERT INTO ubicaciones (id_recinto, referencia) VALUES (:id_recinto, :referencia)");
-    $stmt->execute(['id_recinto'=>$id_recinto, 'referencia'=>$referencia]);
+    // Guardar en tabla ubicaciones incluyendo barrio_comunidad y punto_referencia
+    $stmt = $pdo->prepare("INSERT INTO ubicaciones (id_recinto, barrio_comunidad, punto_referencia) VALUES (:id_recinto, :barrio_comunidad, :punto_referencia)");
+    $stmt->execute([
+        'id_recinto' => $id_recinto,
+        'barrio_comunidad' => $barrio_comunidad,
+        'punto_referencia' => $punto_referencia
+    ]);
 
     $pdo->commit();
-
-    echo "✅ Ubicación guardada correctamente.";
-} catch (PDOException $e) {
-    $pdo->rollBack();
-    die("❌ Error al guardar: ".$e->getMessage());
+    header("Location: index.php?guardado=1");
+    exit;
+} catch (Throwable $e) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+    die("❌ Error al guardar: " . $e->getMessage());
 }
+?>
