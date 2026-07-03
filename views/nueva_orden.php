@@ -1,10 +1,42 @@
 <?php
 require_once '../includes/conexion.php';
+
 try {
+    // Extraer solo los números quitando 'ORD-' y guiones para calcular el siguiente secuencial
+    $sqlSecuencia = "
+        SELECT COALESCE(
+            MAX(
+                CAST(
+                    NULLIF(REGEXP_REPLACE(numero_orden, '\D', '', 'g'), '') 
+                    AS INTEGER
+                )
+            ), 
+            0
+        ) + 1 AS siguiente 
+        FROM ordenes_movilizacion
+    ";
+    
+    $stmtSiguiente = $pdo->query($sqlSecuencia);
+    $siguienteNum = $stmtSiguiente->fetch(PDO::FETCH_ASSOC)['siguiente'];
+    
+    // Reconstruir el formato institucional con 5 ceros a la izquierda
+    $siguienteOrden = "ORD-" . str_pad($siguienteNum, 5, "0", STR_PAD_LEFT);
+
+    // Cargar catálogos iniciales
     $choferes = $pdo->query("SELECT id_chofer, nombres || ' ' || apellidos AS nombre FROM choferes")->fetchAll(PDO::FETCH_ASSOC);
     $vehiculos = $pdo->query("SELECT id_vehiculo, placa || ' - ' || marca || ' ' || modelo AS descripcion FROM vehiculos")->fetchAll(PDO::FETCH_ASSOC);
     $directores = $pdo->query("SELECT id_director, nombres || ' ' || apellidos AS nombre FROM directores")->fetchAll(PDO::FETCH_ASSOC);
-    $ubicaciones = $pdo->query("SELECT u.id_ubicacion, r.nombre AS recinto, p.nombre AS parroquia, c.nombre AS ciudad, pr.nombre AS provincia FROM ubicaciones u JOIN recintos r ON u.id_recinto = r.id_recinto JOIN parroquias p ON r.id_parroquia = p.id_parroquia JOIN ciudades c ON p.id_ciudad = c.id_ciudad JOIN provincias pr ON c.id_provincia = pr.id_provincia ORDER BY pr.nombre, c.nombre, p.nombre, r.nombre")->fetchAll(PDO::FETCH_ASSOC);
+    
+    $ubicaciones = $pdo->query("
+        SELECT u.id_ubicacion, r.nombre AS recinto, p.nombre AS parroquia, c.nombre AS ciudad, pr.nombre AS provincia 
+        FROM ubicaciones u 
+        JOIN recintos r ON u.id_recinto = r.id_recinto 
+        JOIN parroquias p ON r.id_parroquia = p.id_parroquia 
+        JOIN ciudades c ON p.id_ciudad = c.id_ciudad 
+        JOIN provincias pr ON c.id_provincia = pr.id_provincia 
+        ORDER BY pr.nombre, c.nombre, p.nombre, r.nombre
+    ")->fetchAll(PDO::FETCH_ASSOC);
+
 } catch (PDOException $e) {
     die("Error al cargar datos iniciales: " . $e->getMessage());
 }
@@ -22,7 +54,7 @@ try {
     <form action="insertar.php" method="POST" class="form-dos-columnas">
         <div class="form-group">
             <label>Número de Orden</label>
-            <input type="text" name="numero_orden" required>
+            <input type="text" name="numero_orden" value="<?= $siguienteOrden ?>" readonly style="background:#f5f5f5; font-weight:bold;" required>
         </div>
         <div class="form-group">
             <label>Fecha de Emisión</label>
