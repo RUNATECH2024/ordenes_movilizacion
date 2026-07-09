@@ -53,8 +53,18 @@ if (!isset($_SESSION['usuario'])) {
         </div>
 
         <div class="card">
+            <h2>📊 Jefes Departamentales</h2>
+            <a href="jefaturas/index.php">🔹 Administrar Jefes</a>
+        </div>
+
+        <div class="card">
             <h2>🏢 Direcciones</h2>
             <a href="direcciones/index.php">🔹 Administrar Direcciones</a>
+        </div>
+
+        <div class="card">
+            <h2>📄 Permisos Ocasionales</h2>
+            <a href="permisos/index.php">🔹 Emitir Permiso Ocasional</a>
         </div>
 
         <div class="card">

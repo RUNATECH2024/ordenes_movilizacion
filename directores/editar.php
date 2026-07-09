@@ -1,4 +1,5 @@
 <?php
+// directores/editar.php
 session_start();
 
 if (!isset($_SESSION['usuario'])) {
@@ -8,94 +9,58 @@ if (!isset($_SESSION['usuario'])) {
 
 require_once '../includes/conexion.php';
 
-$id = $_GET['id'] ?? null;
+$id_director = $_GET['id'] ?? null;
+if (!$id_director || !is_numeric($id_director)) { die("ID de director no válido"); }
 
-if (!$id || !is_numeric($id)) {
-    die("ID de director no válido");
-}
+$error = '';
 
 try {
-    $stmt = $pdo->prepare("SELECT * FROM directores WHERE id_director = ?");
-    $stmt->execute([$id]);
-    $director = $stmt->fetch(PDO::FETCH_ASSOC);
+    // Obtener el registro actual de la asignación del director
+    $stmt_dir = $pdo->prepare("SELECT * FROM directores WHERE id_director = ?");
+    $stmt_dir->execute([$id_director]);
+    $director_actual = $stmt_dir->fetch(PDO::FETCH_ASSOC);
+    if (!$director_actual) { die("Asignación de dirección no encontrada"); }
 
-    if (!$director) {
-        die("Director no encontrado");
-    }
-
-    $stmt_direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre ASC");
-    $direcciones = $stmt_direcciones->fetchAll(PDO::FETCH_ASSOC);
-
+    // Cargar catálogos de Direcciones y Empleados Activos
+    $direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $empleados = $pdo->query("SELECT id_empleado, cedula, CONCAT(primer_apellido, ' ', COALESCE(segundo_apellido, ''), ' ', primer_nombre) AS nombre_completo FROM empleados WHERE estado = 'ACTIVO' ORDER BY primer_apellido ASC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    die("Error en la base de datos: " . $e->getMessage());
+    die("Error de catálogo: " . $e->getMessage());
 }
 
-$error = "";
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    try {
-        $foto = $director['foto'] ?? null;
+    $id_direccion = !empty($_POST['id_direccion']) ? (int)$_POST['id_direccion'] : null;
+    $id_empleado  = !empty($_POST['id_empleado']) ? (int)$_POST['id_empleado'] : null; // Permite NULL si se desea dejar vacante
+    $estado       = $_POST['estado'] ?? 'ACTIVO';
 
-        if (!empty($_FILES['foto']['name']) && $_FILES['foto']['error'] == 0) {
-            $directorio = "../uploads/directores/";
+    if (!$id_direccion) {
+        $error = "El campo Dirección / Área de Gobierno es obligatorio.";
+    } else {
+        try {
+            $stmt = $pdo->prepare("
+                UPDATE directores 
+                SET id_direccion = :id_direccion, 
+                    id_empleado = :id_empleado, 
+                    estado = :estado
+                WHERE id_director = :id_director
+            ");
+            $stmt->execute([
+                ':id_direccion' => $id_direccion,
+                ':id_empleado'  => $id_empleado, // Guarda el ID o NULL en Postgres
+                ':estado'       => $estado,
+                ':id_director'  => $id_director
+            ]);
 
-            if (!file_exists($directorio)) {
-                mkdir($directorio, 0777, true);
-            }
-
-            if (!empty($foto) && file_exists($directorio . $foto)) {
-                unlink($directorio . $foto);
-            }
-
-            $extension = strtolower(pathinfo($_FILES['foto']['name'], PATHINFO_EXTENSION));
-            $nombreArchivo = time() . "_" . uniqid("DIRECTOR_") . "." . $extension;
-            $rutaDestino = $directorio . $nombreArchivo;
-
-            if (move_uploaded_file($_FILES['foto']['tmp_name'], $rutaDestino)) {
-                $foto = $nombreArchivo;
+            header("Location: index.php?ok=1");
+            exit;
+        } catch (PDOException $e) {
+            // CAPTURA EL TRIGGER DE EXCEPCIÓN DE POSTGRESQL (validar_jefe_o_director)
+            if ($e->getCode() == 'P0001') {
+                $error = "Operación denegada: El funcionario seleccionado ya es JEFE activo de un departamento menor y no puede duplicar funciones como Director.";
+            } else {
+                $error = "Error al actualizar: " . $e->getMessage();
             }
         }
-
-        $update = $pdo->prepare("
-            UPDATE directores SET
-                nombres = :nombres,
-                apellidos = :apellidos,
-                cedula = :cedula,
-                cargo = :cargo,
-                telefono = :telefono,
-                correo = :correo,
-                direccion = :direccion,
-                fecha_nacimiento = :fecha_nacimiento,
-                fecha_ingreso = :fecha_ingreso,
-                foto = :foto,
-                estado = :estado,
-                observaciones = :observaciones,
-                id_direccion = :id_direccion
-            WHERE id_director = :id
-        ");
-
-        $update->execute([
-            ':nombres'          => !empty($_POST['nombres']) ? trim($_POST['nombres']) : null,
-            ':apellidos'        => !empty($_POST['apellidos']) ? trim($_POST['apellidos']) : null,
-            ':cedula'           => !empty($_POST['cedula']) ? trim($_POST['cedula']) : null,
-            ':cargo'            => !empty($_POST['cargo']) ? trim($_POST['cargo']) : null,
-            ':telefono'         => !empty($_POST['telefono']) ? trim($_POST['telefono']) : null,
-            ':correo'           => !empty($_POST['correo']) ? trim($_POST['correo']) : null,
-            ':direccion'        => !empty($_POST['direccion']) ? trim($_POST['direccion']) : null,
-            ':fecha_nacimiento' => !empty($_POST['fecha_nacimiento']) ? $_POST['fecha_nacimiento'] : null,
-            ':fecha_ingreso'    => !empty($_POST['fecha_ingreso']) ? $_POST['fecha_ingreso'] : null,
-            ':foto'             => $foto,
-            ':estado'           => $_POST['estado'] ?? 'ACTIVO',
-            ':observaciones'    => !empty($_POST['observaciones']) ? trim($_POST['observaciones']) : null,
-            ':id_direccion'     => !empty($_POST['id_direccion']) ? (int)$_POST['id_direccion'] : null,
-            ':id'               => $id
-        ]);
-
-        header("Location: index.php?update=1");
-        exit;
-
-    } catch (PDOException $e) {
-        $error = $e->getMessage();
     }
 }
 ?>
@@ -103,115 +68,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Editar Director</title>
+    <title>SGA - Modificar Director</title>
     <link rel="stylesheet" href="../assets/estilos.css">
 </head>
 <body>
+<div class="container" style="max-width: 600px;">
+    <h2>✏️ Modificar Personal Directivo</h2>
+    <hr>
 
-<div class="container">
-    <header>
-        <h2>✏️ Editar Director</h2>
-        <nav>
-            <a href="index.php" class="btn btn-secondary">← Regresar</a>
-        </nav>
-    </header>
-
-    <?php if (!empty($error)): ?>
-        <p style="color:red; background-color: #ffeaea; padding: 10px; border-radius: 5px; border: 1px solid red;">
-            <?= htmlspecialchars($error) ?>
-        </p>
+    <?php if($error): ?>
+        <div style="background-color: #fed7d7; color: #9b2c2c; padding: 12px; margin-bottom: 20px; border-radius: 4px; font-weight: 500;">⚠️ <?= htmlspecialchars($error) ?></div>
     <?php endif; ?>
 
-    <form class="form-dos-columnas" method="POST" enctype="multipart/form-data">
-        <input type="hidden" name="id" value="<?= htmlspecialchars($director['id_director']) ?>">
-
+    <form method="POST" style="display: flex; flex-direction: column; gap: 15px;">
         <div class="form-group">
-            <label>Nombres</label>
-            <input type="text" name="nombres" value="<?= htmlspecialchars($director['nombres'] ?? '') ?>" required>
-        </div>
-
-        <div class="form-group">
-            <label>Apellidos</label>
-            <input type="text" name="apellidos" value="<?= htmlspecialchars($director['apellidos'] ?? '') ?>" required>
-        </div>
-
-        <div class="form-group">
-            <label>Cédula</label>
-            <input type="text" name="cedula" maxlength="10" value="<?= htmlspecialchars($director['cedula'] ?? '') ?>" required>
-        </div>
-
-        <div class="form-group">
-            <label>Cargo</label>
-            <input type="text" name="cargo" value="<?= htmlspecialchars($director['cargo'] ?? '') ?>" required>
-        </div>
-
-        <div class="form-group">
-            <label>Teléfono</label>
-            <input type="text" name="telefono" value="<?= htmlspecialchars($director['telefono'] ?? '') ?>">
-        </div>
-
-        <div class="form-group">
-            <label>Correo</label>
-            <input type="email" name="correo" value="<?= htmlspecialchars($director['correo'] ?? '') ?>">
-        </div>
-
-        <div class="form-group">
-            <label>Fecha Nacimiento</label>
-            <input type="date" name="fecha_nacimiento" value="<?= $director['fecha_nacimiento'] ?? '' ?>">
-        </div>
-
-        <div class="form-group">
-            <label>Fecha Ingreso</label>
-            <input type="date" name="fecha_ingreso" value="<?= $director['fecha_ingreso'] ?? '' ?>">
-        </div>
-
-        <div class="form-group">
-            <label>Dirección Institucional</label>
-            <select name="id_direccion" required>
-                <option value="">Seleccione una Dirección</option>
+            <label>Dirección / Área de Gobierno</label>
+            <select name="id_direccion" required style="width: 100%; padding: 8px;">
                 <?php foreach ($direcciones as $dir): ?>
-                    <?php $selectedDir = (($director['id_direccion'] ?? null) == $dir['id_direccion']) ? 'selected' : ''; ?>
-                    <option value="<?= $dir['id_direccion'] ?>" <?= $selectedDir ?>>
-                        <?= htmlspecialchars($dir['nombre']) ?>
-                    </option>
+                    <option value="<?= $dir['id_direccion'] ?>" <?= $director_actual['id_direccion'] == $dir['id_direccion'] ? 'selected' : '' ?>><?= htmlspecialchars($dir['nombre']) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
 
         <div class="form-group">
-            <label>Estado</label>
-            <select name="estado">
-                <option value="ACTIVO" <?= (($director['estado'] ?? '') == 'ACTIVO') ? 'selected' : '' ?>>ACTIVO</option>
-                <option value="INACTIVO" <?= (($director['estado'] ?? '') == 'INACTIVO') ? 'selected' : '' ?>>INACTIVO</option>
+            <label>Funcionario Designado</label>
+            <select name="id_empleado" style="width: 100%; padding: 8px;">
+                <option value="">-- Dejar Vacante (Sin Director Asignado) --</option>
+                <?php foreach ($empleados as $emp): ?>
+                    <option value="<?= $emp['id_empleado'] ?>" <?= $director_actual['id_empleado'] == $emp['id_empleado'] ? 'selected' : '' ?>>[<?= htmlspecialchars($emp['cedula']) ?>] <?= htmlspecialchars($emp['nombre_completo']) ?></option>
+                <?php endforeach; ?>
             </select>
+            <small style="color: #718096; display:block; margin-top:4px;">Selecciona la opción vacante si necesitas remover a este empleado de la dirección para asignarlo como Jefe.</small>
         </div>
 
-        <div class="form-group ancho-completo">
-            <label>Dirección de Domicilio</label>
-            <textarea name="direccion" rows="3"><?= htmlspecialchars($director['direccion'] ?? '') ?></textarea>
+        <div class="form-group">
+            <label>Estado de la Designación</label>
+            <select name="estado" style="width: 100%; padding: 8px;">
+                <option value="ACTIVO" <?= $director_actual['estado'] === 'ACTIVO' ? 'selected' : '' ?>>ACTIVO (Ejerciendo)</option>
+                <option value="INACTIVO" <?= $director_actual['estado'] === 'INACTIVO' ? 'selected' : '' ?>>INACTIVO (Liberado / Ex-Director)</option>
+            </select>
+            <small style="color: #718096; display:block; margin-top:4px;">Pasar el estado a 'INACTIVO' también libera al empleado ante las restricciones de la base de datos.</small>
         </div>
 
-        <div class="form-group ancho-completo">
-            <label>Observaciones</label>
-            <textarea name="observaciones" rows="4"><?= htmlspecialchars($director['observaciones'] ?? '') ?></textarea>
-        </div>
-
-        <div class="form-group ancho-completo">
-            <label>Fotografía</label>
-            <?php if (!empty($director['foto']) && file_exists("../uploads/directores/" . $director['foto'])): ?>
-                <div style="margin: 10px 0;">
-                    <img src="../uploads/directores/<?= htmlspecialchars($director['foto']) ?>" width="150" style="border:1px solid #ccc; border-radius:10px; padding:5px; object-fit: cover;">
-                </div>
-            <?php endif; ?>
-            <input type="file" name="foto" accept=".jpg,.jpeg,.png,.webp">
-        </div>
-
-        <div class="form-buttons ancho-completo">
-            <button type="submit">💾 Guardar Cambios</button>
-            <a href="index.php" class="btn btn-secondary">❌ Cancelar</a>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <button type="submit" class="btn btn-success" style="flex: 1; padding: 10px; font-weight: bold; cursor: pointer;">💾 Guardar Cambios</button>
+            <a href="index.php" class="btn btn-secondary" style="flex: 1; text-align:center; line-height:2.5; text-decoration:none;">Cancelar</a>
         </div>
     </form>
 </div>
-
 </body>
 </html>

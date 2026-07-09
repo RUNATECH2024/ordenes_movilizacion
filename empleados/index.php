@@ -114,6 +114,7 @@ try {
     <div class="main-header">
         <h2>Listado de Personal Registrado</h2>
         <div class="header-actions">
+            <a href="dashboard.php" class="btn btn-primary">Dashboard</a>
             <a href="../panel_administracion.php" class="btn-panel">← Panel Administrativo</a>
             <a href="crear.php" class="btn btn-primary">Registrar Nuevo Empleado</a>
         </div>

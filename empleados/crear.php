@@ -2,64 +2,56 @@
 // empleados/crear.php
 session_start();
 
-// Control de acceso: Si no hay sesión iniciada, redirige al login
 if (!isset($_SESSION['usuario'])) {
     header("Location: ../auth/login.php");
     exit;
 }
 
-// Aseguramos la ruta absoluta al archivo de conexión usando __DIR__
 require_once __DIR__ . '/../includes/conexion.php'; 
 
 $mensaje = "";
 
-// 1. CARGAR CATÁLOGOS INICIALES DESDE LA BASE DE DATOS
 try {
+    // 1. CARGAR CATÁLOGOS COMPLETOS PARA LOS SELECTS INITIALES
     $generos = $pdo->query("SELECT id_genero, nombre FROM generos ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     $estados_civiles = $pdo->query("SELECT id_estado_civil, nombre FROM estados_civiles ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     $tipos_sangre = $pdo->query("SELECT id_tipo_sangre, nombre FROM tipos_sangre ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     $etnias = $pdo->query("SELECT id_etnia, nombre FROM etnias ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC); 
     $discapacidades = $pdo->query("SELECT id_discapacidad, nombre FROM discapacidades WHERE estado = 'ACTIVO' ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     
-    // Catálogos de ubicación geográfica
     $provincias = $pdo->query("SELECT id_provincia, nombre FROM provincias ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
-    $ciudades = $pdo->query("SELECT id_ciudad, nombre FROM ciudades ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
-    $parroquias = $pdo->query("SELECT id_parroquia, nombre FROM parroquias ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
-
-    // Catálogos iniciales para la Estructura Laboral
     $direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (Exception $e) {
-    $mensaje = "<div class='alert error'>Error al cargar catálogos del sistema: " . $e->getMessage() . "</div>";
+    $mensaje = "<div class='alert error'>Error crítico al cargar componentes: " . $e->getMessage() . "</div>";
 }
 
-// 2. PROCESAR EL FORMULARIO (POST)
+// 2. PROCESAR EL REGISTRO (POST)
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     try {
-        // Iniciamos la transacción para asegurar la integridad de los datos
         $pdo->beginTransaction(); 
 
         // --- PROCESAMIENTO DE LA FOTO ---
         $nombre_foto = null;
         if (isset($_FILES['foto']) && $_FILES['foto']['error'] == 0) {
             $extension = pathinfo($_FILES['foto']['name'], PATHINFO_EXTENSION);
-            // Creamos un nombre único basado en la cédula para evitar colisiones
             $nombre_foto = $_POST['cedula'] . '_' . time() . '.' . $extension;
             $ruta_destino = '../uploads/' . $nombre_foto;
             
-            // Creamos la carpeta uploads si no existe
             if (!is_dir('../uploads/')) {
                 mkdir('../uploads/', 0777, true);
             }
             move_uploaded_file($_FILES['foto']['tmp_name'], $ruta_destino);
         }
 
-        // --- PASO 1: Tabla empleados (Ajustada exactamente a tu estructura de PostgreSQL) ---
-        $sql_emp = "INSERT INTO empleados (cedula, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, fecha_nacimiento, id_genero, id_estado_civil, foto, estado, id_tipo_sangre, id_etnia) 
-                    VALUES (:cedula, :primer_nombre, :segundo_nombre, :primer_apellido, :segundo_apellido, :fecha_nacimiento, :id_genero, :id_estado_civil, :foto, :estado, :id_tipo_sangre, :id_etnia) 
-                    RETURNING id_empleado";
+        // --- PASO 1: Insertar en la tabla empleados ---
+        $sql_ins_emp = "INSERT INTO empleados (cedula, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, 
+                                            fecha_nacimiento, id_genero, id_estado_civil, foto, estado, id_tipo_sangre, id_etnia)
+                        VALUES (:cedula, :primer_nombre, :segundo_nombre, :primer_apellido, :segundo_apellido, 
+                                :fecha_nacimiento, :id_genero, :id_estado_civil, :foto, :estado, :id_tipo_sangre, :id_etnia)
+                        RETURNING id_empleado";
         
-        $stmt_emp = $pdo->prepare($sql_emp);
+        $stmt_emp = $pdo->prepare($sql_ins_emp);
         $stmt_emp->execute([
             ':cedula'           => $_POST['cedula'],
             ':primer_nombre'    => $_POST['primer_nombre'],
@@ -69,72 +61,99 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             ':fecha_nacimiento' => $_POST['fecha_nacimiento'],
             ':id_genero'        => $_POST['id_genero'] ?: null,
             ':id_estado_civil'  => $_POST['id_estado_civil'] ?: null,
-            ':foto'             => $nombre_foto, // Guardará el nombre del archivo o null si no subió
+            ':foto'             => $nombre_foto,
             ':estado'           => isset($_POST['estado_laboral']) ? 'ACTIVO' : 'INACTIVO',
             ':id_tipo_sangre'   => $_POST['id_tipo_sangre'] ?: null,
-            ':id_etnia'         => $_POST['id_etnia'] ?: null 
+            ':id_etnia'         => $_POST['id_etnia'] ?: null
         ]);
         
-        // Obtenemos el ID generado por el nextval serial
-        $id_empleado = $stmt_emp->fetch(PDO::FETCH_ASSOC)['id_empleado'];
+        // Obtener el ID recién creado de forma segura con RETURNING (PostgreSQL)
+        $id_empleado = $stmt_emp->fetchColumn();
 
-        // --- PASO 2: Tabla contacto_personal ---
+        if (!$id_empleado) {
+            throw new Exception("No se pudo generar el ID del nuevo empleado.");
+        }
+
+        // --- PASO 2: Insertar contacto_personal ---
         if (!empty($_POST['celular']) || !empty($_POST['telefono']) || !empty($_POST['correo_personal'])) {
+            $sql_cont = "INSERT INTO contacto_personal (id_empleado, celular, telephone, correo_personal) VALUES (?, ?, ?, ?)";
+            // Nota: Cambia 'telephone' por 'telefono' si es el nombre real de tu columna en esa tabla
             $sql_cont = "INSERT INTO contacto_personal (id_empleado, celular, telefono, correo_personal) VALUES (?, ?, ?, ?)";
             $pdo->prepare($sql_cont)->execute([$id_empleado, $_POST['celular'], $_POST['telefono'], $_POST['correo_personal']]);
         }
 
-        // --- PASO 3: Tabla correo_institucional ---
+        // --- PASO 3: Insertar correo_institucional ---
         if (!empty($_POST['correo_inst'])) {
             $sql_corr = "INSERT INTO correo_institucional (id_empleado, correo, usuario, activo) VALUES (?, ?, ?, TRUE)";
             $pdo->prepare($sql_corr)->execute([$id_empleado, $_POST['correo_inst'], $_POST['usuario_inst']]);
         }
 
-        // --- PASO 4: Tabla ubicacion_domiciliaria ---
+        // --- PASO 4: Insertar ubicacion_domiciliaria ---
         $sql_dom = "INSERT INTO ubicacion_domiciliaria (id_empleado, id_provincia, id_ciudades, id_parroquia, barrio, calle_principal, calle_secundaria, numero_casa, referencia) 
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         $pdo->prepare($sql_dom)->execute([
-            $id_empleado, 
-            $_POST['id_provincia'] ?: null, 
-            $_POST['id_ciudad'] ?: null, 
-            $_POST['id_parroquia'] ?: null, 
-            $_POST['barrio'], 
-            $_POST['calle_principal'], 
-            $_POST['calle_secundaria'], 
-            $_POST['numero_casa'], 
-            $_POST['referencia']
+            $id_empleado, $_POST['id_provincia'] ?: null, $_POST['id_ciudad'] ?: null, $_POST['id_parroquia'] ?: null, 
+            $_POST['barrio'], $_POST['calle_principal'], $_POST['calle_secundaria'], $_POST['numero_casa'], $_POST['referencia']
         ]);
 
-        // --- PASO 5: Tabla historial_laboral (Puesto de Trabajo) ---
+        // --- PASO 5: Historial Laboral y Sincronización Estructural ---
         if (!empty($_POST['id_cargo'])) {
+            $id_cargo = (int)$_POST['id_cargo'];
+            $id_direccion = (int)$_POST['id_direccion'];
+            $id_jefatura = (int)$_POST['id_jefatura'];
+
+            // Insertar el puesto inicial activo
             $sql_hist = "INSERT INTO historial_laboral (id_empleado, id_cargo, id_tipo_nombramiento, fecha_inicio, activo) 
                          VALUES (?, ?, ?, ?, TRUE)";
             $pdo->prepare($sql_hist)->execute([
-                $id_empleado, 
-                $_POST['id_cargo'],
-                $_POST['id_tipo_nombramiento'] ?: null, 
-                $_POST['fecha_ingreso'] ?: date('Y-m-d')
+                $id_empleado, $id_cargo, $_POST['id_tipo_nombramiento'] ?: null, $_POST['fecha_ingreso'] ?: date('Y-m-d')
             ]);
+
+            // --- PASO 5.2: ASIGNACIÓN DE MANDOS AUTOMÁTICOS ---
+            $stmt_chk = $pdo->prepare("SELECT nombre FROM cargos WHERE id_cargo = ?");
+            $stmt_chk->execute([$id_cargo]);
+            $cargo_info = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+            $nombre_cargo_upper = strtoupper($cargo_info['nombre'] ?? '');
+
+            if (strpos($nombre_cargo_upper, 'DIRECTOR') !== false || strpos($nombre_cargo_upper, 'DIRECTORA') !== false) {
+                $stmt_dir_exists = $pdo->prepare("SELECT id_director FROM directores WHERE id_direccion = ?");
+                $stmt_dir_exists->execute([$id_direccion]);
+                if ($stmt_dir_exists->fetch()) {
+                    $pdo->prepare("UPDATE directores SET id_empleado = ?, estado = 'ACTIVO' WHERE id_direccion = ?")
+                        ->execute([$id_empleado, $id_direccion]);
+                } else {
+                    $pdo->prepare("INSERT INTO directores (id_direccion, id_empleado, estado) VALUES (?, ?, 'ACTIVO')")
+                        ->execute([$id_direccion, $id_empleado]);
+                }
+            }
+            else if (strpos($nombre_cargo_upper, 'JEFE') !== false || strpos($nombre_cargo_upper, 'JEFA') !== false) {
+                $pdo->prepare("UPDATE jefaturas SET id_empleado_jefe = ? WHERE id_jefatura = ?")
+                    ->execute([$id_empleado, $id_jefatura]);
+            }
         }
 
-        // --- PASO 6: Tabla empleado_discapacidad (Opcional) ---
+        // --- PASO 6: Discapacidad ---
         if (!empty($_POST['id_discapacidad'])) {
             $sql_disc = "INSERT INTO empleado_discapacidad (id_empleado, id_discapacidad, porcentaje, numero_carnet, observaciones) VALUES (?, ?, ?, ?, ?)";
             $pdo->prepare($sql_disc)->execute([
-                $id_empleado, 
-                $_POST['id_discapacidad'], 
-                $_POST['porcentaje'] ?: 0, 
-                $_POST['numero_carnet'], 
-                $_POST['observaciones_disc']
+                $id_empleado, $_POST['id_discapacidad'], $_POST['porcentaje'] ?: 0, $_POST['numero_carnet'], $_POST['observaciones_disc']
             ]);
         }
 
-        // Consolidamos la transacción
         $pdo->commit(); 
-        $mensaje = "<div class='alert success'>¡Empleado registrado y asignado a su puesto exitosamente! ID Empleado: <strong>$id_empleado</strong></div>";
-    } catch (Exception $e) {
+        header("Location: index.php?success=1");
+        exit;
+
+    } catch (PDOException $e) {
         $pdo->rollBack(); 
-        $mensaje = "<div class='alert error'>Error crítico. No se guardó ningún dato: " . $e->getMessage() . "</div>";
+        if ($e->getCode() == 'P0001' || strpos($e->getMessage(), 'duplicar funciones') !== false) {
+            $mensaje = "<div class='alert error'>⚠️ <strong>Restricción de Estructura:</strong> El cargo asignado es directivo y ya se encuentra ocupado por otro líder activo.</div>";
+        } else {
+            $mensaje = "<div class='alert error'>Error en la base de datos: " . $e->getMessage() . "</div>";
+        }
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        $mensaje = "<div class='alert error'>Error general: " . $e->getMessage() . "</div>";
     }
 }
 ?>
@@ -144,14 +163,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SGA - Nuevo Empleado Profesional</title>
+    <title>SGA - Registrar Nuevo Personal</title>
     <link rel="stylesheet" href="../assets/estilos.css?v=<?= time(); ?>">
 </head>
 <body>
 
 <div class="container">
     <div class="main-header">
-        <h2>Formulario de Registro de Personal</h2>
+        <h2>Registrar Nuevo Expediente de Personal</h2>
         <a href="index.php" class="btn btn-secondary">Volver al Listado</a>
     </div>
     
@@ -163,7 +182,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <div class="grid-2">
             <div class="form-group">
                 <label>Cédula de Identidad <span class="required">*</span></label>
-                <input type="text" name="cedula" maxlength="10" placeholder="Ej. 1712345678" required>
+                <input type="text" name="cedula" placeholder="Ej. 0201234567" maxlength="10" required>
             </div>
             <div class="form-group">
                 <label>Fecha de Nacimiento <span class="required">*</span></label>
@@ -231,23 +250,23 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <div class="grid-2">
             <div class="form-group">
                 <label>Teléfono Celular</label>
-                <input type="text" name="celular" placeholder="09xxxxxxxx">
+                <input type="text" name="celular">
             </div>
             <div class="form-group">
                 <label>Teléfono Fijo</label>
-                <input type="text" name="telefono" placeholder="02xxxxxxx">
+                <input type="text" name="telefono">
             </div>
             <div class="form-group">
                 <label>Correo Electrónico Personal</label>
-                <input type="email" name="correo_personal" placeholder="ejemplo@correo.com">
+                <input type="email" name="correo_personal">
             </div>
             <div class="form-group">
                 <label>Correo Institucional</label>
-                <input type="email" name="correo_inst" placeholder="usuario@institucion.gob.ec">
+                <input type="email" name="correo_inst">
             </div>
             <div class="form-group">
                 <label>Usuario del Sistema</label>
-                <input type="text" name="usuario_inst" placeholder="ej. jdoe">
+                <input type="text" name="usuario_inst">
             </div>
         </div>
 
@@ -255,7 +274,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <div class="grid-2">
             <div class="form-group">
                 <label>Provincia</label>
-                <select name="id_provincia">
+                <select name="id_provincia" id="id_provincia">
                     <option value="">-- Seleccione --</option>
                     <?php foreach($provincias as $p): ?>
                         <option value="<?= $p['id_provincia'] ?>"><?= htmlspecialchars($p['nombre']) ?></option>
@@ -264,20 +283,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </div>
             <div class="form-group">
                 <label>Cantón / Ciudad</label>
-                <select name="id_ciudad">
-                    <option value="">-- Seleccione --</option>
-                    <?php foreach($ciudades as $ci): ?>
-                        <option value="<?= $ci['id_ciudad'] ?>"><?= htmlspecialchars($ci['nombre']) ?></option>
-                    <?php endforeach; ?>
+                <select name="id_ciudad" id="id_ciudad">
+                    <option value="">-- Seleccione Provincia Primero --</option>
                 </select>
             </div>
             <div class="form-group">
                 <label>Parroquia</label>
-                <select name="id_parroquia">
-                    <option value="">-- Seleccione --</option>
-                    <?php foreach($parroquias as $pa): ?>
-                        <option value="<?= $pa['id_parroquia'] ?>"><?= htmlspecialchars($pa['nombre']) ?></option>
-                    <?php endforeach; ?>
+                <select name="id_parroquia" id="id_parroquia">
+                    <option value="">-- Seleccione Cantón Primero --</option>
                 </select>
             </div>
             <div class="form-group">
@@ -298,14 +311,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </div>
             <div class="form-group">
                 <label>Referencia Domiciliaria</label>
-                <textarea name="referencia" rows="1" placeholder="Referencias de ubicación..."></textarea>
+                <textarea name="referencia" rows="1"></textarea>
             </div>
         </div>
 
-        <h3>4. Información Laboral</h3>
+        <h3>4. Información Laboral Estructural</h3>
         <div class="grid-2">
             <div class="form-group">
-                <label>Dirección <span class="required">*</span></label>
+                <label>Dirección Macro <span class="required">*</span></label>
                 <select name="id_direccion" id="id_direccion" required>
                     <option value="">-- Seleccione Dirección --</option>
                     <?php foreach($direcciones as $dir): ?>
@@ -314,13 +327,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 </select>
             </div>
             <div class="form-group">
-                <label>Jefatura <span class="required">*</span></label>
+                <label>Jefatura / Departamento <span class="required">*</span></label>
                 <select name="id_jefatura" id="id_jefatura" required>
                     <option value="">-- Seleccione Dirección Primero --</option>
                 </select>
             </div>
             <div class="form-group">
-                <label>Cargo <span class="required">*</span></label>
+                <label>Cargo Operativo o Jerárquico <span class="required">*</span></label>
                 <select name="id_cargo" id="id_cargo" required>
                     <option value="">-- Seleccione Jefatura Primero --</option>
                 </select>
@@ -335,12 +348,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 </select>
             </div>
             <div class="form-group">
-                <label>Fecha de Ingreso <span class="required">*</span></label>
+                <label>Fecha de Asignación / Ingreso <span class="required">*</span></label>
                 <input type="date" name="fecha_ingreso" value="<?= date('Y-m-d') ?>" required>
             </div>
-            <div class="checkbox-group">
+            <div class="checkbox-group" style="margin-top: 25px;">
                 <input type="checkbox" name="estado_laboral" id="estado_laboral" value="ACTIVO" checked>
-                <label for="estado_laboral">Activo en la empresa</label>
+                <label for="estado_laboral"><strong>Activo por defecto al crear</strong></label>
             </div>
         </div>
 
@@ -369,21 +382,23 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </div>
         </div>
 
-        <button type="submit">Registrar Empleado al Sistema</button>
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 15px; font-size: 16px; font-weight: bold; margin-top: 20px; cursor: pointer;">💾 Registrar Colaborador y Guardar Estructura</button>
     </form>
 </div>
 
 <script>
+// Lógica AJAX unificada para encadenamiento estructural
 document.getElementById('id_direccion').addEventListener('change', function() {
     var idDireccion = this.value;
     var selectJefatura = document.getElementById('id_jefatura');
+    var selectCargo = document.getElementById('id_cargo');
     selectJefatura.innerHTML = '<option value="">Cargando...</option>';
+    selectCargo.innerHTML = '<option value="">-- Seleccione Jefatura Primero --</option>';
     
     if(!idDireccion) {
         selectJefatura.innerHTML = '<option value="">-- Seleccione Dirección Primero --</option>';
         return;
     }
-
     fetch('get_ajax.php?tipo=jefaturas&id=' + idDireccion)
         .then(response => response.json())
         .then(data => {
@@ -403,7 +418,6 @@ document.getElementById('id_jefatura').addEventListener('change', function() {
         selectCargo.innerHTML = '<option value="">-- Seleccione Jefatura Primero --</option>';
         return;
     }
-
     fetch('get_ajax.php?tipo=cargos&id=' + idJefatura)
         .then(response => response.json())
         .then(data => {
@@ -411,6 +425,34 @@ document.getElementById('id_jefatura').addEventListener('change', function() {
             data.forEach(item => {
                 selectCargo.innerHTML += `<option value="${item.id_cargo}">${item.nombre}</option>`;
             });
+        });
+});
+
+document.getElementById('id_provincia').addEventListener('change', function() {
+    var idProv = this.value;
+    var selectCiu = document.getElementById('id_ciudad');
+    var selectPar = document.getElementById('id_parroquia');
+    selectCiu.innerHTML = '<option value="">Cargando...</option>';
+    selectPar.innerHTML = '<option value="">-- Seleccione Cantón Primero --</option>';
+    if(!idProv) { selectCiu.innerHTML = '<option value="">-- Seleccione Provincia Primero --</option>'; return; }
+    
+    fetch('get_ajax.php?tipo=ciudades&id=' + idProv)
+        .then(r => r.json()).then(data => {
+            selectCiu.innerHTML = '<option value="">-- Seleccione Cantón --</option>';
+            data.forEach(i => { selectCiu.innerHTML += `<option value="${i.id_ciudad}">${i.nombre}</option>`; });
+        });
+});
+
+document.getElementById('id_ciudad').addEventListener('change', function() {
+    var idCiu = this.value;
+    var selectPar = document.getElementById('id_parroquia');
+    selectPar.innerHTML = '<option value="">Cargando...</option>';
+    if(!idCiu) { selectPar.innerHTML = '<option value="">-- Seleccione Cantón Primero --</option>'; return; }
+    
+    fetch('get_ajax.php?tipo=parroquias&id=' + idCiu)
+        .then(r => r.json()).then(data => {
+            selectPar.innerHTML = '<option value="">-- Seleccione Parroquia --</option>';
+            data.forEach(i => { selectPar.innerHTML += `<option value="${i.id_parroquia}">${i.nombre}</option>`; });
         });
 });
 </script>
