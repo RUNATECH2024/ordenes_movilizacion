@@ -55,6 +55,7 @@ try {
     <div class="main-header">
         <h2>Bandeja Unificada de Control y Legalización</h2>
         <a href="crear.php" class="btn btn-primary">+ Nueva Papeleta</a>
+        <!-- Se removió el botón global de aquí que causaba el error -->
     </div>
 
     <?php echo $mensaje; ?>
@@ -65,18 +66,18 @@ try {
         <?php foreach($permisos as $reg): ?>
             <div class="permiso-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px;">
-                    <strong>📄 Permiso Nº: <span style="color:#b91c1c;"><?= htmlspecialchars($reg['numero_permiso']) ?></span></strong>
+                    <strong>📄 Permiso Nº: <span style="color:#b91c1c;"><?= htmlspecialchars($reg['numero_permiso'] ?? '') ?></span></strong>
                     <div>
                         <span>Estado General: </span>
-                        <span class="badge badge-<?= strtolower($reg['estado_legalizacion']) ?>"><?= $reg['estado_legalizacion'] ?></span>
+                        <span class="badge badge-<?= strtolower($reg['estado_legalizacion'] ?? 'pendiente') ?>"><?= htmlspecialchars($reg['estado_legalizacion'] ?? 'PENDIENTE') ?></span>
                     </div>
                 </div>
 
                 <div class="grid-2" style="font-size: 14px;">
-                    <p><strong>Funcionario:</strong> <?= htmlspecialchars($reg['empleado_nombre']) ?> (<?= $reg['cedula'] ?>)</p>
-                    <p><strong>Clase de Permiso:</strong> <?= htmlspecialchars($reg['clase_nombre']) ?></p>
-                    <p><strong>Fecha Ausencia:</strong> <?= $reg['fecha_permiso'] ?> | <strong>Tiempo:</strong> <?= $reg['total_dias'] ?> Día(s) / <?= $reg['total_horas'] ?> Horas</p>
-                    <p><strong>Condición (Jefe):</strong> <span style="color:#0056b3; font-weight:bold;"><?= htmlspecialchars($reg['condicion_nombre']) ?></span></p>
+                    <p><strong>Funcionario:</strong> <?= htmlspecialchars($reg['empleado_nombre'] ?? '') ?> (<?= htmlspecialchars($reg['cedula'] ?? '') ?>)</p>
+                    <p><strong>Clase de Permiso:</strong> <?= htmlspecialchars($reg['clase_nombre'] ?? '') ?></p>
+                    <p><strong>Fecha Ausencia:</strong> <?= htmlspecialchars($reg['fecha_permiso'] ?? '') ?> | <strong>Tiempo:</strong> <?= htmlspecialchars($reg['total_dias'] ?? '0') ?> Día(s) / <?= htmlspecialchars($reg['total_horas'] ?? '0') ?> Horas</p>
+                    <p><strong>Condición (Jefe):</strong> <span style="color:#0056b3; font-weight:bold;"><?= htmlspecialchars($reg['condicion_nombre'] ?? '') ?></span></p>
                 </div>
                 
                 <?php if(!empty($reg['observaciones'])): ?>
@@ -84,38 +85,42 @@ try {
                 <?php endif; ?>
 
                 <div class="firmas-row">
-                    
                     <div class="firma-box">
                         <span style="font-size: 11px; color: #6c757d; display:block;">1. SOLICITANTE</span>
                         <strong style="color: green; font-size: 13px;">✍️ FIRMADO DIGITAL</strong>
-                        <p style="font-size: 10px; color:gray; margin:0;"><?= $reg['fecha_registro'] ?></p>
+                        <p style="font-size: 10px; color:gray; margin:0;"><?= htmlspecialchars($reg['fecha_registro'] ?? '') ?></p>
                         <span style="font-size: 12px; font-weight:bold; border-top: 1px solid #ccc; display:block; margin-top:5px; padding-top:2px;">Firma del Empleado</span>
                     </div>
 
                     <div class="firma-box">
                         <span style="font-size: 11px; color: #6c757d; display:block;">2. JEFE INMEDIATO</span>
-                        <span class="badge badge-<?= strtolower($reg['firma_jefe_estado']) ?>"><?= $reg['firma_jefe_estado'] ?></span>
+                        <span class="badge badge-<?= strtolower($reg['firma_jefe_estado'] ?? 'pendiente') ?>"><?= htmlspecialchars($reg['firma_jefe_estado'] ?? 'PENDIENTE') ?></span>
                         <span style="font-size: 12px; font-weight:bold; border-top: 1px solid #ccc; display:block; margin-top:5px; padding-top:2px;">Jefe de Departamento</span>
                     </div>
 
                     <div class="firma-box">
                         <span style="font-size: 11px; color: #6c757d; display:block;">3. LEGALIZADO</span>
-                        <span class="badge badge-<?= strtolower($reg['firma_director_estado']) ?>"><?= $reg['firma_director_estado'] ?></span>
+                        <span class="badge badge-<?= strtolower($reg['firma_director_estado'] ?? 'pendiente') ?>"><?= htmlspecialchars($reg['firma_director_estado'] ?? 'PENDIENTE') ?></span>
                         <span style="font-size: 12px; font-weight:bold; border-top: 1px solid #ccc; display:block; margin-top:5px; padding-top:2px;">Oficina de Personal</span>
                     </div>
-
                 </div>
 
                 <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
+                    <!-- 🛠️ EL BOTÓN CORREGIDO AHORA ESTÁ AQUÍ ADENTRO Y USA LA VARIABLE DIRECTA $reg -->
+                    <a href="imprimir_permiso.php?id=<?= $reg['id_permiso'] ?>" class="btn btn-primary" style="padding: 6px 12px; font-size:13px; background:#475569; text-decoration:none; color:white; border-radius:4px; display:inline-flex; align-items:center;" target="_blank">
+                        🖨️ Imprimir
+                    </a>
+
                     <form action="firmar.php" method="POST" style="display:inline;">
                         <input type="hidden" name="id_permiso" value="<?= $reg['id_permiso'] ?>">
                         <input type="hidden" name="accion" value="APROBAR">
-                        <button type="submit" class="btn btn-primary" style="padding: 6px 12px; font-size:13px; background:#16a34a;">✍️ Estampar Mi Firma (Aprobar)</button>
+                        <button type="submit" class="btn btn-primary" style="padding: 6px 12px; font-size:13px; background:#16a34a; border:none; border-radius:4px; color:white; cursor:pointer;">✍️ Estampar Mi Firma (Aprobar)</button>
                     </form>
+                    
                     <form action="firmar.php" method="POST" style="display:inline;">
                         <input type="hidden" name="id_permiso" value="<?= $reg['id_permiso'] ?>">
                         <input type="hidden" name="accion" value="RECHAZAR">
-                        <button type="submit" class="btn btn-secondary" style="padding: 6px 12px; font-size:13px; background:#dc2626; color:white;">❌ Rechazar</button>
+                        <button type="submit" class="btn btn-secondary" style="padding: 6px 12px; font-size:13px; background:#dc2626; border:none; border-radius:4px; color:white; cursor:pointer;">❌ Rechazar</button>
                     </form>
                 </div>
             </div>
