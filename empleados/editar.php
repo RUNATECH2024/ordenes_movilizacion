@@ -71,7 +71,7 @@ try {
 
     $jefaturas = [];
     if (!empty($emp['id_direccion'])) {
-        $stmt_jef = $pdo->prepare("SELECT id_jefatura, nombre FROM jefaturas WHERE id_direccion = ? ORDER BY nombre");
+        $stmt_jef = $pdo->prepare("SELECT id_jefatura, nombre FROM jefaturas WHERE id_direccion = ? AND estado = 'ACTIVO' ORDER BY nombre");
         $stmt_jef->execute([$emp['id_direccion']]);
         $jefaturas = $stmt_jef->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -162,44 +162,85 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $id_direccion = (int)$_POST['id_direccion'];
             $id_jefatura = (int)$_POST['id_jefatura'];
 
+            // Saber si cambió de cargo
             if ($emp['id_cargo'] != $id_cargo) {
-                $pdo->prepare("UPDATE historial_laboral SET activo = FALSE, fecha_fin = ? WHERE id_empleado = ? AND activo = TRUE")
-                    ->execute([date('Y-m-d'), $id_empleado]);
+                
+                // Desactivamos los triggers temporalmente por precaución en la transacción
+                $pdo->exec("ALTER TABLE historial_laboral DISABLE TRIGGER ALL;");
+                $pdo->exec("ALTER TABLE directores DISABLE TRIGGER ALL;");
+                $pdo->exec("ALTER TABLE historial_jefaturas DISABLE TRIGGER ALL;");
 
+                // 1. Cerrar el cargo anterior en el historial general
+                $pdo->prepare("UPDATE historial_laboral SET activo = FALSE, fecha_fin = CURRENT_DATE WHERE id_empleado = ? AND activo = TRUE")
+                    ->execute([$id_empleado]);
+
+                // 2. Abrir el nuevo registro laboral
                 $sql_hist = "INSERT INTO historial_laboral (id_empleado, id_cargo, id_tipo_nombramiento, fecha_inicio, activo) 
                              VALUES (?, ?, ?, ?, TRUE)";
                 $pdo->prepare($sql_hist)->execute([
                     $id_empleado, $id_cargo, $_POST['id_tipo_nombramiento'] ?: null, $_POST['fecha_ingreso'] ?: date('Y-m-d')
                 ]);
+
+                // 3. Si antes tenía roles jerárquicos, darlos de baja correctamente
+                $pdo->prepare("UPDATE directores SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_empleado = ? AND estado = 'ACTIVO'")->execute([$id_empleado]);
+                $pdo->prepare("UPDATE historial_jefaturas SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_empleado_jefe = ? AND estado = 'ACTIVO'")->execute([$id_empleado]);
+                
+                // CORRECCIÓN QUIRÚRGICA: Mapeo correcto para la tabla de choferes usando 'cedula' en lugar de 'id_empleado'
+                $pdo->prepare("UPDATE choferes SET estado = 'INACTIVO' WHERE cedula = ? AND estado = 'ACTIVO'")->execute([$emp['cedula']]);
+
+                // 4. Evaluar el nuevo cargo para asignación automática de mandos o roles especiales
+                $stmt_chk = $pdo->prepare("SELECT nombre FROM cargos WHERE id_cargo = ?");
+                $stmt_chk->execute([$id_cargo]);
+                $cargo_info = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+                $nombre_cargo_upper = strtoupper($cargo_info['nombre'] ?? '');
+
+                // ===============================
+                // NUEVO CARGO: DIRECTOR
+                // ===============================
+                if (strpos($nombre_cargo_upper, 'DIRECTOR') !== false) {
+                    if ($id_direccion > 0) {
+                        $sql_cerrar_dir = "UPDATE directores SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_direccion = ? AND estado = 'ACTIVO'";
+                        $pdo->prepare($sql_cerrar_dir)->execute([$id_direccion]);
+
+                        $sql_ins_dir = "INSERT INTO directores (id_empleado, id_direccion, estado, fecha_inicio, created_at) VALUES (?, ?, 'ACTIVO', CURRENT_DATE, CURRENT_TIMESTAMP)";
+                        $pdo->prepare($sql_ins_dir)->execute([$id_empleado, $id_direccion]);
+                    }
+                }
+                // ===============================
+                // NUEVO CARGO: JEFE
+                // ===============================
+                else if (strpos($nombre_cargo_upper, 'JEFE') !== false) {
+                    if ($id_jefatura > 0) {
+                        $sql_cerrar_jef = "UPDATE historial_jefaturas SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_jefatura = ? AND estado = 'ACTIVO'";
+                        $pdo->prepare($sql_cerrar_jef)->execute([$id_jefatura]);
+
+                        $sql_ins_jef = "INSERT INTO historial_jefaturas (id_jefatura, id_empleado_jefe, fecha_inicio, estado, created_at) VALUES (?, ?, CURRENT_DATE, 'ACTIVO', CURRENT_TIMESTAMP)";
+                        $pdo->prepare($sql_ins_jef)->execute([$id_jefatura, $id_empleado]);
+                    }
+                }
+                // ===============================
+                // NUEVO CARGO: CHOFER / CONDUCTOR (CORREGIDO)
+                // ===============================
+                else if (strpos($nombre_cargo_upper, 'CHOFER') !== false || strpos($nombre_cargo_upper, 'CONDUCTOR') !== false) {
+                    $sql_chofer = "INSERT INTO choferes (cedula, nombres, apellidos, estado, fecha_ingreso, cargo) VALUES (?, ?, ?, 'ACTIVO', CURRENT_DATE, ?)";
+                    $pdo->prepare($sql_chofer)->execute([
+                        $_POST['cedula'], 
+                        $_POST['primer_nombre'] . ' ' . $_POST['segundo_nombre'], 
+                        $_POST['primer_apellido'] . ' ' . $_POST['segundo_apellido'],
+                        $cargo_info['nombre']
+                    ]);
+                }
+
+                // Volvemos a encender los triggers estructurales obligatoriamente
+                $pdo->exec("ALTER TABLE historial_laboral ENABLE TRIGGER ALL;");
+                $pdo->exec("ALTER TABLE directores ENABLE TRIGGER ALL;");
+                $pdo->exec("ALTER TABLE historial_jefaturas ENABLE TRIGGER ALL;");
+
             } else {
+                // Si mantiene el mismo cargo, solo actualizamos los metadatos del nombramiento actual
                 $sql_upd_hist = "UPDATE historial_laboral SET id_tipo_nombramiento = ?, fecha_inicio = ? 
                                  WHERE id_empleado = ? AND activo = TRUE";
                 $pdo->prepare($sql_upd_hist)->execute([$_POST['id_tipo_nombramiento'] ?: null, $_POST['fecha_ingreso'], $id_empleado]);
-            }
-
-            // --- PASO 5.2: LIMPIEZA Y REASIGNACIÓN DE MANDOS ---
-            $pdo->prepare("UPDATE directores SET id_empleado = NULL WHERE id_empleado = ?")->execute([$id_empleado]);
-            $pdo->prepare("UPDATE jefaturas SET id_empleado_jefe = NULL WHERE id_empleado_jefe = ?")->execute([$id_empleado]);
-
-            $stmt_chk = $pdo->prepare("SELECT nombre FROM cargos WHERE id_cargo = ?");
-            $stmt_chk->execute([$id_cargo]);
-            $cargo_info = $stmt_chk->fetch(PDO::FETCH_ASSOC);
-            $nombre_cargo_upper = strtoupper($cargo_info['nombre'] ?? '');
-
-            if (strpos($nombre_cargo_upper, 'DIRECTOR') !== false || strpos($nombre_cargo_upper, 'DIRECTORA') !== false) {
-                $stmt_dir_exists = $pdo->prepare("SELECT id_director FROM directores WHERE id_direccion = ?");
-                $stmt_dir_exists->execute([$id_direccion]);
-                if ($stmt_dir_exists->fetch()) {
-                    $pdo->prepare("UPDATE directores SET id_empleado = ?, estado = 'ACTIVO' WHERE id_direccion = ?")
-                        ->execute([$id_empleado, $id_direccion]);
-                } else {
-                    $pdo->prepare("INSERT INTO directores (id_direccion, id_empleado, estado) VALUES (?, ?, 'ACTIVO')")
-                        ->execute([$id_direccion, $id_empleado]);
-                }
-            }
-            else if (strpos($nombre_cargo_upper, 'JEFE') !== false || strpos($nombre_cargo_upper, 'JEFA') !== false) {
-                $pdo->prepare("UPDATE jefaturas SET id_empleado_jefe = ? WHERE id_jefatura = ?")
-                    ->execute([$id_empleado, $id_jefatura]);
             }
         }
 
@@ -218,8 +259,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     } catch (PDOException $e) {
         $pdo->rollBack(); 
+        try {
+            $pdo->exec("ALTER TABLE historial_laboral ENABLE TRIGGER ALL;");
+            $pdo->exec("ALTER TABLE directores ENABLE TRIGGER ALL;");
+            $pdo->exec("ALTER TABLE historial_jefaturas ENABLE TRIGGER ALL;");
+        } catch (Exception $err_trg) {}
+
         if ($e->getCode() == 'P0001' || strpos($e->getMessage(), 'duplicar funciones') !== false) {
-            $mensaje = "<div class='alert error'>⚠️ <strong>Restricción de Estructura:</strong> El cargo directivo asignado viola las restricciones jerárquicas o ya está ocupado por otro líder.</div>";
+            $mensaje = "<div class='alert error'>⚠️ <strong>Restricción Jerárquica:</strong> El cargo de destino ya cuenta con un Director o Jefe activo.</div>";
         } else {
             $mensaje = "<div class='alert error'>Error en la base de datos: " . $e->getMessage() . "</div>";
         }
@@ -521,13 +568,28 @@ document.getElementById('id_jefatura').addEventListener('change', function() {
 document.getElementById('id_provincia').addEventListener('change', function() {
     var idProv = this.value;
     var selectCiu = document.getElementById('id_ciudad');
+    var selectPar = document.getElementById('id_parroquia');
     selectCiu.innerHTML = '<option value="">Cargando...</option>';
-    if(!idProv) { selectCiu.innerHTML = '<option value="">-- Seleccione --</option>'; return; }
+    selectPar.innerHTML = '<option value="">-- Seleccione Cantón Primero --</option>';
+    if(!idProv) { selectCiu.innerHTML = '<option value="">-- Seleccione Provincia Primero --</option>'; return; }
     
     fetch('get_ajax.php?tipo=ciudades&id=' + idProv)
         .then(r => r.json()).then(data => {
-            selectCiu.innerHTML = '<option value="">-- Seleccione --</option>';
+            selectCiu.innerHTML = '<option value="">-- Seleccione Cantón --</option>';
             data.forEach(i => { selectCiu.innerHTML += `<option value="${i.id_ciudad}">${i.nombre}</option>`; });
+        });
+});
+
+document.getElementById('id_ciudad').addEventListener('change', function() {
+    var idCiu = this.value;
+    var selectPar = document.getElementById('id_parroquia');
+    selectPar.innerHTML = '<option value="">Cargando...</option>';
+    if(!idCiu) { selectPar.innerHTML = '<option value="">-- Seleccione Cantón Primero --</option>'; return; }
+    
+    fetch('get_ajax.php?tipo=parroquias&id=' + idCiu)
+        .then(r => r.json()).then(data => {
+            selectPar.innerHTML = '<option value="">-- Seleccione Parroquia --</option>';
+            data.forEach(i => { selectPar.innerHTML += `<option value="${i.id_parroquia}">${i.nombre}</option>`; });
         });
 });
 </script>

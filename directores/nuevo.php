@@ -1,7 +1,10 @@
 <?php
 // directores/nuevo.php
 session_start();
-if (!isset($_SESSION['usuario'])) { header("Location: ../auth/login.php"); exit; }
+if (!isset($_SESSION['usuario'])) { 
+    header("Location: ../auth/login.php"); 
+    exit; 
+}
 require_once '../includes/conexion.php';
 
 $error = '';
@@ -22,6 +25,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = "El campo Dirección / Área de Gobierno es obligatorio.";
     } else {
         try {
+            // Validación preventiva: Evitar dos directores ACTIVOS asignados a la misma dirección
+            if ($estado === 'ACTIVO') {
+                $checkActive = $pdo->prepare("SELECT COUNT(*) FROM directores WHERE id_direccion = :id_direccion AND estado = 'ACTIVO'");
+                $checkActive->execute([':id_direccion' => $id_direccion]);
+                if ($checkActive->fetchColumn() > 0) {
+                    throw new Exception("Esta Dirección/Área ya cuenta con un Director activo asignado. Modifique el anterior a INACTIVO antes de proceder.");
+                }
+            }
+
             $stmt = $pdo->prepare("INSERT INTO directores (id_direccion, id_empleado, estado) VALUES (:id_direccion, :id_empleado, :estado)");
             $stmt->execute([
                 ':id_direccion' => $id_direccion,
@@ -36,8 +48,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($e->getCode() == 'P0001') {
                 $error = "Operación denegada: El funcionario seleccionado ya es JEFE activo de un departamento menor y no puede asumir como Director.";
             } else {
-                $error = "Error al guardar: " . $e->getMessage();
+                $error = "Error al guardar en el sistema: " . $e->getMessage();
             }
+        } catch (Exception $e) {
+            $error = $e->getMessage();
         }
     }
 }
@@ -60,30 +74,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <form method="POST" style="display: flex; flex-direction: column; gap: 15px;">
         <div class="form-group">
-            <label>Dirección / Área de Gobierno</label>
-            <select name="id_direccion" required style="width: 100%; padding: 8px;">
+            <label style="font-weight: bold; color: #2d3748;">Dirección / Área de Gobierno</label>
+            <select name="id_direccion" required style="width: 100%; padding: 8px; margin-top: 5px;">
                 <option value="">-- Seleccione el Área --</option>
                 <?php foreach ($direcciones as $dir): ?>
-                    <option value="<?= $dir['id_direccion'] ?>"><?= htmlspecialchars($dir['nombre']) ?></option>
+                    <option value="<?= $dir['id_direccion'] ?>" <?= isset($_POST['id_direccion']) && $_POST['id_direccion'] == $dir['id_direccion'] ? 'selected' : '' ?>><?= htmlspecialchars($dir['nombre']) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
 
         <div class="form-group">
-            <label>Funcionario Designado (Opcional)</label>
-            <select name="id_empleado" style="width: 100%; padding: 8px;">
+            <label style="font-weight: bold; color: #2d3748;">Funcionario Designado (Opcional)</label>
+            <select name="id_empleado" style="width: 100%; padding: 8px; margin-top: 5px;">
                 <option value="">-- Dejar Vacante de Momento --</option>
                 <?php foreach ($empleados as $emp): ?>
-                    <option value="<?= $emp['id_empleado'] ?>">[<?= htmlspecialchars($emp['cedula']) ?>] <?= htmlspecialchars($emp['nombre_completo']) ?></option>
+                    <option value="<?= $emp['id_empleado'] ?>" <?= isset($_POST['id_empleado']) && $_POST['id_empleado'] == $emp['id_empleado'] ? 'selected' : '' ?>>[<?= htmlspecialchars($emp['cedula']) ?>] <?= htmlspecialchars($emp['nombre_completo']) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
 
         <div class="form-group">
-            <label>Estado Inicial</label>
-            <select name="estado" style="width: 100%; padding: 8px;">
-                <option value="ACTIVO">ACTIVO (Ejerciendo)</option>
-                <option value="INACTIVO">INACTIVO (En Espera / Suspendido)</option>
+            <label style="font-weight: bold; color: #2d3748;">Estado Inicial</label>
+            <select name="estado" style="width: 100%; padding: 8px; margin-top: 5px;">
+                <option value="ACTIVO" <?= isset($_POST['estado']) && $_POST['estado'] === 'ACTIVO' ? 'selected' : '' ?>>ACTIVO (Ejerciendo)</option>
+                <option value="INACTIVO" <?= isset($_POST['estado']) && $_POST['estado'] === 'INACTIVO' ? 'selected' : '' ?>>INACTIVO (En Espera / Suspendido)</option>
             </select>
         </div>
 

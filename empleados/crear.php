@@ -12,7 +12,7 @@ require_once __DIR__ . '/../includes/conexion.php';
 $mensaje = "";
 
 try {
-    // 1. CARGAR CATÁLOGOS COMPLETOS PARA LOS SELECTS INITIALES
+    // 1. CARGAR CATÁLOGOS COMPLETOS PARA LOS SELECTS INICIALES
     $generos = $pdo->query("SELECT id_genero, nombre FROM generos ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     $estados_civiles = $pdo->query("SELECT id_estado_civil, nombre FROM estados_civiles ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     $tipos_sangre = $pdo->query("SELECT id_tipo_sangre, nombre FROM tipos_sangre ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
@@ -67,7 +67,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             ':id_etnia'         => $_POST['id_etnia'] ?: null
         ]);
         
-        // Obtener el ID recién creado de forma segura con RETURNING (PostgreSQL)
         $id_empleado = $stmt_emp->fetchColumn();
 
         if (!$id_empleado) {
@@ -76,8 +75,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         // --- PASO 2: Insertar contacto_personal ---
         if (!empty($_POST['celular']) || !empty($_POST['telefono']) || !empty($_POST['correo_personal'])) {
-            $sql_cont = "INSERT INTO contacto_personal (id_empleado, celular, telephone, correo_personal) VALUES (?, ?, ?, ?)";
-            // Nota: Cambia 'telephone' por 'telefono' si es el nombre real de tu columna en esa tabla
             $sql_cont = "INSERT INTO contacto_personal (id_empleado, celular, telefono, correo_personal) VALUES (?, ?, ?, ?)";
             $pdo->prepare($sql_cont)->execute([$id_empleado, $_POST['celular'], $_POST['telefono'], $_POST['correo_personal']]);
         }
@@ -102,7 +99,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $id_direccion = (int)$_POST['id_direccion'];
             $id_jefatura = (int)$_POST['id_jefatura'];
 
-            // Insertar el puesto inicial activo
+            // Insertar el puesto inicial activo en el historial general
             $sql_hist = "INSERT INTO historial_laboral (id_empleado, id_cargo, id_tipo_nombramiento, fecha_inicio, activo) 
                          VALUES (?, ?, ?, ?, TRUE)";
             $pdo->prepare($sql_hist)->execute([
@@ -115,20 +112,46 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $cargo_info = $stmt_chk->fetch(PDO::FETCH_ASSOC);
             $nombre_cargo_upper = strtoupper($cargo_info['nombre'] ?? '');
 
-            if (strpos($nombre_cargo_upper, 'DIRECTOR') !== false || strpos($nombre_cargo_upper, 'DIRECTORA') !== false) {
-                $stmt_dir_exists = $pdo->prepare("SELECT id_director FROM directores WHERE id_direccion = ?");
-                $stmt_dir_exists->execute([$id_direccion]);
-                if ($stmt_dir_exists->fetch()) {
-                    $pdo->prepare("UPDATE directores SET id_empleado = ?, estado = 'ACTIVO' WHERE id_direccion = ?")
-                        ->execute([$id_empleado, $id_direccion]);
-                } else {
-                    $pdo->prepare("INSERT INTO directores (id_direccion, id_empleado, estado) VALUES (?, ?, 'ACTIVO')")
-                        ->execute([$id_direccion, $id_empleado]);
+            // ===============================
+            // ASIGNAR DIRECTOR (Cubre DIRECTOR y DIRECTORA)
+            // ===============================
+            if (strpos($nombre_cargo_upper, 'DIRECTOR') !== false) {
+                if ($id_direccion > 0) {
+                    // Cierra el director anterior guardando su fecha de fin
+                    $sql_cerrar_director = "UPDATE directores 
+                                            SET estado='INACTIVO', fecha_fin = CURRENT_DATE 
+                                            WHERE id_direccion = ? AND estado='ACTIVO'";
+                    $pdo->prepare($sql_cerrar_director)->execute([$id_direccion]);
+
+                    // Registra el nuevo director con fecha_inicio y created_at
+                    $sql_director = "INSERT INTO directores (id_empleado, id_direccion, estado, fecha_inicio, created_at) 
+                                     VALUES (?, ?, 'ACTIVO', CURRENT_DATE, CURRENT_TIMESTAMP)";
+                    $pdo->prepare($sql_director)->execute([$id_empleado, $id_direccion]);
                 }
             }
-            else if (strpos($nombre_cargo_upper, 'JEFE') !== false || strpos($nombre_cargo_upper, 'JEFA') !== false) {
-                $pdo->prepare("UPDATE jefaturas SET id_empleado_jefe = ? WHERE id_jefatura = ?")
-                    ->execute([$id_empleado, $id_jefatura]);
+            // ===============================
+            // ASIGNAR JEFE (Cubre JEFE y JEFA)
+            // ===============================
+            else if (strpos($nombre_cargo_upper, 'JEFE') !== false) {
+                if ($id_jefatura > 0) {
+                    // Cierra el jefe anterior guardando su fecha de fin
+                    $sql_cerrar_jefe = "UPDATE historial_jefaturas 
+                                        SET estado='INACTIVO', fecha_fin = CURRENT_DATE 
+                                        WHERE id_jefatura = ? AND estado='ACTIVO'";
+                    $pdo->prepare($sql_cerrar_jefe)->execute([$id_jefatura]);
+
+                    // Inserta el nuevo jefe incluyendo auditoría created_at
+                    $sql_nuevo_jefe = "INSERT INTO historial_jefaturas (id_jefatura, id_empleado_jefe, fecha_inicio, estado, created_at) 
+                                       VALUES (?, ?, CURRENT_DATE, 'ACTIVO', CURRENT_TIMESTAMP)";
+                    $pdo->prepare($sql_nuevo_jefe)->execute([$id_jefatura, $id_empleado]);
+                }
+            }
+            // ===============================
+            // ASIGNAR CHOFER (Cubre CHOFER y CONDUCTOR)
+            // ===============================
+            else if (strpos($nombre_cargo_upper, 'CHOFER') !== false || strpos($nombre_cargo_upper, 'CONDUCTOR') !== false) {
+                $sql_chofer = "INSERT INTO choferes (id_empleado, estado, fecha_inicio) VALUES (?, 'ACTIVO', CURRENT_DATE)";
+                $pdo->prepare($sql_chofer)->execute([$id_empleado]);
             }
         }
 
@@ -147,7 +170,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     } catch (PDOException $e) {
         $pdo->rollBack(); 
         if ($e->getCode() == 'P0001' || strpos($e->getMessage(), 'duplicar funciones') !== false) {
-            $mensaje = "<div class='alert error'>⚠️ <strong>Restricción de Estructura:</strong> El cargo asignado es directivo y ya se encuentra ocupado por otro líder activo.</div>";
+            $mensaje = "<div class='alert error'>⚠️ <strong>Restricción de Estructura:</strong> El cargo asignado es directivo/jefatura y ya se encuentra ocupado por otro líder activo.</div>";
         } else {
             $mensaje = "<div class='alert error'>Error en la base de datos: " . $e->getMessage() . "</div>";
         }
@@ -387,7 +410,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 </div>
 
 <script>
-// Lógica AJAX unificada para encadenamiento estructural
+// Lógica AJAX unificada para encadenamiento estructural de selects
 document.getElementById('id_direccion').addEventListener('change', function() {
     var idDireccion = this.value;
     var selectJefatura = document.getElementById('id_jefatura');

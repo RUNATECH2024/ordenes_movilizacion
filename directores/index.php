@@ -10,7 +10,7 @@ if (!isset($_SESSION['usuario'])) {
 require_once '../includes/conexion.php';
 
 try {
-    // Usamos LEFT JOIN para empleados, así si queda vacante no se oculta la dirección de la lista
+    // Usamos LEFT JOIN para empleados, de este modo si queda vacante o pasa a inactivo, no se oculta la dirección de la lista
     $sql = "SELECT 
                 dir.id_director,
                 d.nombre AS direccion_nombre,
@@ -22,7 +22,7 @@ try {
             FROM directores dir
             INNER JOIN direcciones d ON dir.id_direccion = d.id_direccion
             LEFT JOIN empleados e ON dir.id_empleado = e.id_empleado
-            ORDER BY e.primer_apellido ASC, e.primer_nombre ASC";
+            ORDER BY dir.estado ASC, e.primer_apellido ASC, e.primer_nombre ASC";
 
     $stmt = $pdo->query($sql);
     $directores = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -83,7 +83,7 @@ try {
                     </tr>
                 <?php else: ?>
                     <?php foreach ($directores as $dir): ?>
-                        <tr style="border-bottom: 1px solid #e2e8f0;">
+                        <tr style="border-bottom: 1px solid #e2e8f0; <?= $dir['estado'] !== 'ACTIVO' ? 'background-color: #fcfcfc; opacity: 0.8;' : '' ?>">
                             <td style="text-align: center; padding: 10px; vertical-align: middle;">
                                 <?php if (!empty($dir['foto']) && file_exists('../uploads/' . $dir['foto'])): ?>
                                     <img src="../uploads/<?= htmlspecialchars($dir['foto']) ?>" class="avatar-lista" alt="Foto">

@@ -10,7 +10,7 @@ if (!isset($_SESSION['usuario'])) {
 require_once '../includes/conexion.php';
 
 try {
-    // Usamos LEFT JOIN para el empleado jefe, así no se ocultan las jefaturas vacantes
+    // CORRECCIÓN RELACIONAL: Buscamos al jefe activo desde la tabla historial_jefaturas
     $sql = "SELECT 
                 j.id_jefatura,
                 j.codigo,
@@ -20,7 +20,8 @@ try {
                 j.estado
             FROM jefaturas j
             INNER JOIN direcciones d ON j.id_direccion = d.id_direccion
-            LEFT JOIN empleados e ON j.id_empleado_jefe = e.id_empleado
+            LEFT JOIN historial_jefaturas hj ON j.id_jefatura = hj.id_jefatura AND hj.estado = 'ACTIVO'
+            LEFT JOIN empleados e ON hj.id_empleado_jefe = e.id_empleado
             ORDER BY j.nombre ASC";
 
     $stmt = $pdo->query($sql);
@@ -54,7 +55,6 @@ try {
     <table class="table" style="width: 100%; border-collapse: collapse;">
         <thead>
             <tr style="background-color: #f7fafc; border-bottom: 2px solid #e2e8f0;">
-                <code style="display:none;"></code>
                 <th style="padding: 12px; text-align: left;">Código</th>
                 <th style="padding: 12px; text-align: left;">Jefatura</th>
                 <th style="padding: 12px; text-align: left;">Dirección Macro</th>

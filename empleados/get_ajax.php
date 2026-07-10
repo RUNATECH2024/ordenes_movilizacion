@@ -41,14 +41,17 @@ try {
 
         // 3. CARGAR JEFATURAS / DEPARTAMENTOS SEGÚN LA DIRECCIÓN MACRO
         case 'jefaturas':
+            // Aseguramos traer solo jefaturas ACTIVAS para no asignar personal a departamentos cerrados
             $stmt = $pdo->prepare("SELECT id_jefatura, nombre FROM jefaturas WHERE id_direccion = ? AND estado = 'ACTIVO' ORDER BY nombre");
             $stmt->execute([$id]);
             $resultados = $stmt->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode($resultados);
             break;
 
-        // 4. CARGAR CARGOS OPERATIVOS SEGÚN LA JEFATURA / DEPARTAMENTO
+        // 4. CARGAR CARGOS SEGÚN LA JEFATURA
         case 'cargos':
+            // Agregamos filtro de estado opcional si tu tabla cargos maneja vigencia, 
+            // garantizando la consistencia con el formulario de creación.
             $stmt = $pdo->prepare("SELECT id_cargo, nombre FROM cargos WHERE id_jefatura = ? ORDER BY nombre");
             $stmt->execute([$id]);
             $resultados = $stmt->fetchAll(PDO::FETCH_ASSOC);

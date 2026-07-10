@@ -37,6 +37,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = "El campo Dirección / Área de Gobierno es obligatorio.";
     } else {
         try {
+            // Validación preventiva: Evitar duplicidad de directores ACTIVOS en una misma dirección
+            if ($estado === 'ACTIVO') {
+                $checkActive = $pdo->prepare("SELECT COUNT(*) FROM directores WHERE id_direccion = :id_direccion AND estado = 'ACTIVO' AND id_director <> :id_director");
+                $checkActive->execute([
+                    ':id_direccion' => $id_direccion,
+                    ':id_director'  => $id_director
+                ]);
+                if ($checkActive->fetchColumn() > 0) {
+                    throw new Exception("Esta Dirección/Área ya cuenta con un Director activo asignado. Modifique la otra asignación a INACTIVO antes de proceder.");
+                }
+            }
+
             $stmt = $pdo->prepare("
                 UPDATE directores 
                 SET id_direccion = :id_direccion, 
@@ -58,8 +70,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($e->getCode() == 'P0001') {
                 $error = "Operación denegada: El funcionario seleccionado ya es JEFE activo de un departamento menor y no puede duplicar funciones como Director.";
             } else {
-                $error = "Error al actualizar: " . $e->getMessage();
+                $error = "Error al actualizar en el sistema: " . $e->getMessage();
             }
+        } catch (Exception $e) {
+            $error = $e->getMessage();
         }
     }
 }
@@ -82,8 +96,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <form method="POST" style="display: flex; flex-direction: column; gap: 15px;">
         <div class="form-group">
-            <label>Dirección / Área de Gobierno</label>
-            <select name="id_direccion" required style="width: 100%; padding: 8px;">
+            <label style="font-weight: bold; color: #2d3748;">Dirección / Área de Gobierno</label>
+            <select name="id_direccion" required style="width: 100%; padding: 8px; margin-top: 5px;">
                 <?php foreach ($direcciones as $dir): ?>
                     <option value="<?= $dir['id_direccion'] ?>" <?= $director_actual['id_direccion'] == $dir['id_direccion'] ? 'selected' : '' ?>><?= htmlspecialchars($dir['nombre']) ?></option>
                 <?php endforeach; ?>
@@ -91,8 +105,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
 
         <div class="form-group">
-            <label>Funcionario Designado</label>
-            <select name="id_empleado" style="width: 100%; padding: 8px;">
+            <label style="font-weight: bold; color: #2d3748;">Funcionario Designado</label>
+            <select name="id_empleado" style="width: 100%; padding: 8px; margin-top: 5px;">
                 <option value="">-- Dejar Vacante (Sin Director Asignado) --</option>
                 <?php foreach ($empleados as $emp): ?>
                     <option value="<?= $emp['id_empleado'] ?>" <?= $director_actual['id_empleado'] == $emp['id_empleado'] ? 'selected' : '' ?>>[<?= htmlspecialchars($emp['cedula']) ?>] <?= htmlspecialchars($emp['nombre_completo']) ?></option>
@@ -102,8 +116,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
 
         <div class="form-group">
-            <label>Estado de la Designación</label>
-            <select name="estado" style="width: 100%; padding: 8px;">
+            <label style="font-weight: bold; color: #2d3748;">Estado de la Designación</label>
+            <select name="estado" style="width: 100%; padding: 8px; margin-top: 5px;">
                 <option value="ACTIVO" <?= $director_actual['estado'] === 'ACTIVO' ? 'selected' : '' ?>>ACTIVO (Ejerciendo)</option>
                 <option value="INACTIVO" <?= $director_actual['estado'] === 'INACTIVO' ? 'selected' : '' ?>>INACTIVO (Liberado / Ex-Director)</option>
             </select>

@@ -24,19 +24,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = "Los campos Dirección, Código y Nombre son obligatorios.";
     } else {
         try {
-            $stmt = $pdo->prepare("INSERT INTO jefaturas (id_direccion, codigo, nombre, descripcion, id_empleado_jefe, estado) VALUES (:id_direccion, :codigo, :nombre, :descripcion, :id_empleado_jefe, 'ACTIVO')");
+            $pdo->beginTransaction(); // Iniciamos la transacción de seguridad
+
+            // 1. CORRECCIÓN: Quitamos id_empleado_jefe del INSERT de la tabla jefaturas
+            $stmt = $pdo->prepare("INSERT INTO jefaturas (id_direccion, codigo, nombre, descripcion, estado) VALUES (:id_direccion, :codigo, :nombre, :descripcion, 'ACTIVO')");
             $stmt->execute([
-                ':id_direccion'     => $id_direccion,
-                ':codigo'           => $codigo,
-                ':nombre'           => $nombre,
-                ':descripcion'      => $descripcion,
-                ':id_empleado_jefe' => $id_empleado_jefe
+                ':id_direccion' => $id_direccion,
+                ':codigo'       => $codigo,
+                ':nombre'       => $nombre,
+                ':descripcion'  => $descripcion
             ]);
+
+            // Obtenemos el ID de la jefatura que se acaba de crear
+            $id_nueva_jefatura = $pdo->lastInsertId();
+
+            // 2. Si se seleccionó un jefe inicial, creamos su registro en la tabla relacional historial_jefaturas
+            if ($id_nueva_jefatura && $id_empleado_jefe) {
+                
+                // Desactivamos al empleado si ya era jefe activo en algún otro departamento
+                $pdo->prepare("UPDATE historial_jefaturas SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_empleado_jefe = ? AND estado = 'ACTIVO'")
+                    ->execute([$id_empleado_jefe]);
+
+                // Insertamos el nuevo registro en el historial
+                $sql_ins_jef = "INSERT INTO historial_jefaturas (id_jefatura, id_empleado_jefe, fecha_inicio, estado, created_at) 
+                                VALUES (?, ?, CURRENT_DATE, 'ACTIVO', CURRENT_TIMESTAMP)";
+                $pdo->prepare($sql_ins_jef)->execute([$id_nueva_jefatura, $id_empleado_jefe]);
+            }
+
+            $pdo->commit(); // Guardamos todos los cambios en la BD
             header("Location: index.php?ok=1");
             exit;
         } catch (PDOException $e) {
-            if ($e->getCode() == 'P0001') {
-                $error = "Operación denegada: El empleado ya es DIRECTOR activo y no puede ser Jefe.";
+            $pdo->rollBack(); // Si algo sale mal, cancelamos la operación
+            if ($e->getCode() == 'P0001' || strpos($e->getMessage(), 'Director') !== false) {
+                $error = "Operación denegada: El empleado seleccionado ya es DIRECTOR activo en el sistema y no puede duplicar funciones como Jefe.";
             } else {
                 $error = "Error al guardar: " . $e->getMessage();
             }
@@ -56,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <h2>➕ Registrar Nueva Jefatura</h2>
     <hr>
     <?php if($error): ?>
-        <div style="background-color: #fed7d7; color: #9b2c2c; padding: 12px; margin-bottom: 20px; border-radius: 4px;">⚠️ <?= htmlspecialchars($error) ?></div>
+        <div style="background-color: #fed7d7; color: #9b2c2c; padding: 12px; margin-bottom: 20px; border-radius: 4px; font-weight: 500;">⚠️ <?= htmlspecialchars($error) ?></div>
     <?php endif; ?>
 
     <form method="POST" style="display: flex; flex-direction: column; gap: 15px;">
@@ -91,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <textarea name="descripcion" rows="3" style="width: 100%; padding: 8px;"></textarea>
         </div>
         <div style="display: flex; gap: 10px;">
-            <button type="submit" class="btn btn-success" style="flex:1; padding: 10px;">Guardar</button>
+            <button type="submit" class="btn btn-success" style="flex:1; padding: 10px; font-weight: bold; cursor: pointer;">Guardar</button>
             <a href="index.php" class="btn btn-secondary" style="flex:1; text-align:center; line-height:2.3; text-decoration:none;">Cancelar</a>
         </div>
     </form>

@@ -20,6 +20,11 @@ try {
     $jefatura = $stmt_jef->fetch(PDO::FETCH_ASSOC);
     if (!$jefatura) { die("Jefatura no encontrada"); }
 
+    // CORRECCIÓN: Obtenemos el ID del jefe actual consultando el historial activo
+    $stmt_actual_jefe = $pdo->prepare("SELECT id_empleado_jefe FROM historial_jefaturas WHERE id_jefatura = ? AND estado = 'ACTIVO' LIMIT 1");
+    $stmt_actual_jefe->execute([$id_jefatura]);
+    $jefatura['id_empleado_jefe'] = $stmt_actual_jefe->fetchColumn() ?: null;
+
     $direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre ASC")->fetchAll(PDO::FETCH_ASSOC);
     $empleados = $pdo->query("SELECT id_empleado, cedula, CONCAT(primer_apellido, ' ', COALESCE(segundo_apellido, ''), ' ', primer_nombre) AS nombre_completo FROM empleados WHERE estado = 'ACTIVO' ORDER BY primer_apellido ASC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
@@ -38,27 +43,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = "Los campos Dirección, Código y Nombre son obligatorios.";
     } else {
         try {
+            $pdo->beginTransaction(); // Iniciamos transacción para asegurar los datos
+
+            // 1. CORRECCIÓN: UPDATE sin la columna inexistente 'id_empleado_jefe'
             $stmt = $pdo->prepare("
                 UPDATE jefaturas 
                 SET id_direccion = :id_direccion, codigo = :codigo, nombre = :nombre, 
-                    descripcion = :descripcion, estado = :estado, id_empleado_jefe = :id_empleado_jefe
+                    descripcion = :descripcion, estado = :estado
                 WHERE id_jefatura = :id_jefatura
             ");
             $stmt->execute([
-                ':id_direccion'     => $id_direccion,
-                ':codigo'           => $codigo,
-                ':nombre'           => $nombre,
-                ':descripcion'      => $descripcion,
-                ':estado'           => $estado,
-                ':id_empleado_jefe' => $id_empleado_jefe, // Mandará el ID o un valor NULL limpio a Postgres
-                ':id_jefatura'      => $id_jefatura
+                ':id_direccion' => $id_direccion,
+                ':codigo'       => $codigo,
+                ':nombre'       => $nombre,
+                ':descripcion'  => $descripcion,
+                ':estado'       => $estado,
+                ':id_jefatura'  => $id_jefatura
             ]);
 
+            // 2. LÓGICA DE ACTUALIZACIÓN DEL HISTORIAL DE JEFES
+            if ($jefatura['id_empleado_jefe'] != $id_empleado_jefe) {
+                
+                // Desactivamos al jefe anterior de esta jefatura
+                $pdo->prepare("UPDATE historial_jefaturas SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_jefatura = ? AND estado = 'ACTIVO'")
+                    ->execute([$id_jefatura]);
+
+                // Si se asignó un nuevo jefe (y no se dejó vacante), creamos su registro activo
+                if ($id_empleado_jefe) {
+                    // Desactivamos si este nuevo jefe tenía otra jefatura activa antes
+                    $pdo->prepare("UPDATE historial_jefaturas SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_empleado_jefe = ? AND estado = 'ACTIVO'")
+                        ->execute([$id_empleado_jefe]);
+
+                    $sql_ins_jef = "INSERT INTO historial_jefaturas (id_jefatura, id_empleado_jefe, fecha_inicio, estado, created_at) 
+                                    VALUES (?, ?, CURRENT_DATE, 'ACTIVO', CURRENT_TIMESTAMP)";
+                    $pdo->prepare($sql_ins_jef)->execute([$id_jefatura, $id_empleado_jefe]);
+                }
+            }
+
+            $pdo->commit();
             header("Location: index.php?ok=1");
             exit;
         } catch (PDOException $e) {
+            $pdo->rollBack();
             // CAPTURA DEL TRIGGER PERSONALIZADO DE POSTGRESQL
-            if ($e->getCode() == 'P0001') {
+            if ($e->getCode() == 'P0001' || strpos($e->getMessage(), 'Director') !== false) {
                 $error = "Operación denegada: El empleado seleccionado ya está asignado como DIRECTOR activo en el sistema y no puede duplicar funciones como Jefe.";
             } else {
                 $error = "Error al actualizar: " . $e->getMessage();
