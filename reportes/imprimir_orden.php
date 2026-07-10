@@ -20,29 +20,39 @@ if (!$id) {
     die("ID no válido");
 }
 
-// Obtener datos completos de la orden y sus relaciones
-$query = $pdo->prepare("
-    SELECT o.*,
-           c.nombres AS chofer_nombres, c.apellidos AS chofer_apellidos, c.cedula AS chofer_cedula,
-           v.placa, v.modelo, v.color, v.matricula,
-           r.nombre AS recinto, p.nombre AS parroquia, ci.nombre AS ciudad, pr.nombre AS provincia,
-           d.nombres AS director_nombres, d.apellidos AS director_apellidos, d.cedula AS director_cedula, d.cargo
-    FROM ordenes_movilizacion o
-    JOIN choferes c ON o.id_chofer = c.id_chofer
-    JOIN vehiculos v ON o.id_vehiculo = v.id_vehiculo
-    JOIN ubicaciones u ON o.id_ubicacion = u.id_ubicacion
-    JOIN recintos r ON u.id_recinto = r.id_recinto
-    JOIN parroquias p ON r.id_parroquia = p.id_parroquia
-    JOIN ciudades ci ON p.id_ciudad = ci.id_ciudad
-    JOIN provincias pr ON ci.id_provincia = pr.id_provincia
-    JOIN directores d ON o.id_director = d.id_director
-    WHERE o.id_orden = :id
-");
-$query->execute([':id' => $id]);
-$orden = $query->fetch(PDO::FETCH_ASSOC);
+try {
+    // Obtener datos completos de la orden y sus relaciones usando la tabla empleados
+    $query = $pdo->prepare("
+        SELECT o.*,
+               c.nombres AS chofer_nombres, c.apellidos AS chofer_apellidos, c.cedula AS chofer_cedula,
+               v.placa, v.modelo, v.color, v.matricula,
+               r.nombre AS recinto, p.nombre AS parroquia, ci.nombre AS ciudad, pr.nombre AS provincia,
+               e.primer_nombre || ' ' || COALESCE(e.segundo_nombre, '') || ' ' || e.primer_apellido || ' ' || COALESCE(e.segundo_apellido, '') AS director_nombre_completo,
+               e.cedula AS director_cedula
+        FROM ordenes_movilizacion o
+        JOIN choferes c ON o.id_chofer = c.id_chofer
+        JOIN vehiculos v ON o.id_vehiculo = v.id_vehiculo
+        JOIN ubicaciones u ON o.id_ubicacion = u.id_ubicacion
+        JOIN recintos r ON u.id_recinto = r.id_recinto
+        JOIN parroquias p ON r.id_parroquia = p.id_parroquia
+        JOIN ciudades ci ON p.id_ciudad = ci.id_ciudad
+        JOIN provincias pr ON ci.id_provincia = pr.id_provincia
+        JOIN directores d ON o.id_director = d.id_director
+        JOIN empleados e ON d.id_empleado = e.id_empleado
+        WHERE o.id_orden = :id
+    ");
+    $query->execute([':id' => $id]);
+    $orden = $query->fetch(PDO::FETCH_ASSOC);
 
-if (!$orden) {
-    die("Orden no encontrada");
+    if (!$orden) {
+        die("Orden no encontrada");
+    }
+    
+    // Definimos el cargo de manera estática para evitar el error de columna inexistente
+    $orden['director_cargo'] = "Director Responsable";
+
+} catch (PDOException $e) {
+    die("Error en la base de datos: " . $e->getMessage());
 }
 
 // Ruta del logotipo institucional
@@ -111,9 +121,9 @@ $html = "
     <tr>
         <td>
             <div class='linea-firma'></div>
-            <strong>" . htmlspecialchars($orden['director_nombres'] . " " . $orden['director_apellidos']) . "</strong><br>
+            <strong>" . htmlspecialchars($orden['director_nombre_completo']) . "</strong><br>
             C.I. " . htmlspecialchars($orden['director_cedula']) . "<br>
-            <span class='cargo-director'>" . htmlspecialchars($orden['cargo']) . "</span><br>
+            <span class='cargo-director'>" . htmlspecialchars($orden['director_cargo']) . "</span><br>
             <strong>Firma y Sello Autorizado</strong>
         </td>
     </tr>
