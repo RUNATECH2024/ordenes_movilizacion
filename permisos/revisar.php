@@ -55,7 +55,6 @@ try {
     <div class="main-header">
         <h2>Bandeja Unificada de Control y Legalización</h2>
         <a href="crear.php" class="btn btn-primary">+ Nueva Papeleta</a>
-        <!-- Se removió el botón global de aquí que causaba el error -->
     </div>
 
     <?php echo $mensaje; ?>
@@ -63,7 +62,36 @@ try {
     <?php if (empty($permisos)): ?>
         <p>No existen registros de permisos guardados en el sistema.</p>
     <?php else: ?>
-        <?php foreach($permisos as $reg): ?>
+        <?php foreach($permisos as $reg): 
+            // ==========================================================
+            // CÁLCULO DINÁMICO DE HORAS 
+            // ==========================================================
+            $totalHorasCard = $reg['total_horas'] ?? 0;
+
+            if (!empty($reg['hora_salida']) && !empty($reg['hora_llegada'])) {
+                $h_salida = new DateTime($reg['hora_salida']);
+                $h_llegada = new DateTime($reg['hora_llegada']);
+                
+                $intervalo = $h_salida->diff($h_llegada);
+                $totalHorasCalculadas = $intervalo->h + ($intervalo->i / 60);
+
+                $limite_almuerzo_inicio = new DateTime($h_salida->format('Y-m-d') . ' 12:00:00');
+                $limite_almuerzo_fin = new DateTime($h_llegada->format('Y-m-d') . ' 13:00:00');
+
+                // Descontar la hora de almuerzo si el rango la cruza por completo
+                if ($h_salida <= $limite_almuerzo_inicio && $h_llegada >= $limite_almuerzo_fin) {
+                    $totalHorasCalculadas = $totalHorasCalculadas - 1;
+                }
+                
+                if ($totalHorasCalculadas < 0) {
+                    $totalHorasCalculadas = 0;
+                }
+                $totalHorasCard = $totalHorasCalculadas;
+            }
+
+            $totalHorasFormateado = number_format((float)$totalHorasCard, 2, '.', '');
+            // ==========================================================
+        ?>
             <div class="permiso-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px;">
                     <strong>📄 Permiso Nº: <span style="color:#b91c1c;"><?= htmlspecialchars($reg['numero_permiso'] ?? '') ?></span></strong>
@@ -76,7 +104,7 @@ try {
                 <div class="grid-2" style="font-size: 14px;">
                     <p><strong>Funcionario:</strong> <?= htmlspecialchars($reg['empleado_nombre'] ?? '') ?> (<?= htmlspecialchars($reg['cedula'] ?? '') ?>)</p>
                     <p><strong>Clase de Permiso:</strong> <?= htmlspecialchars($reg['clase_nombre'] ?? '') ?></p>
-                    <p><strong>Fecha Ausencia:</strong> <?= htmlspecialchars($reg['fecha_permiso'] ?? '') ?> | <strong>Tiempo:</strong> <?= htmlspecialchars($reg['total_dias'] ?? '0') ?> Día(s) / <?= htmlspecialchars($reg['total_horas'] ?? '0') ?> Horas</p>
+                    <p><strong>Fecha Ausencia:</strong> <?= htmlspecialchars($reg['fecha_permiso'] ?? '') ?> | <strong>Tiempo:</strong> <?= htmlspecialchars($reg['total_dias'] ?? '0') ?> Día(s) / <?= $totalHorasFormateado ?> Horas</p>
                     <p><strong>Condición (Jefe):</strong> <span style="color:#0056b3; font-weight:bold;"><?= htmlspecialchars($reg['condicion_nombre'] ?? '') ?></span></p>
                 </div>
                 
@@ -106,7 +134,6 @@ try {
                 </div>
 
                 <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
-                    <!-- 🛠️ EL BOTÓN CORREGIDO AHORA ESTÁ AQUÍ ADENTRO Y USA LA VARIABLE DIRECTA $reg -->
                     <a href="imprimir_permiso.php?id=<?= $reg['id_permiso'] ?>" class="btn btn-primary" style="padding: 6px 12px; font-size:13px; background:#475569; text-decoration:none; color:white; border-radius:4px; display:inline-flex; align-items:center;" target="_blank">
                         🖨️ Imprimir
                     </a>

@@ -93,7 +93,35 @@ $fechaDetalle = $permiso['fecha_permiso'] ? date("d/m/Y", strtotime($permiso['fe
 $horaSalida = $permiso['hora_salida'] ? date("H:i", strtotime($permiso['hora_salida'])) : '________';
 $horaLlegada = $permiso['hora_llegada'] ? date("H:i", strtotime($permiso['hora_llegada'])) : '________';
 $totalDias = $permiso['total_dias'] ?? '0';
-$totalHoras = $permiso['total_horas'] ?? '0';
+
+// ==========================================================
+// CÁLCULO DINÁMICO DE HORAS (Sincronizado con revisar.php)
+// ==========================================================
+$totalHorasCalculadas = $permiso['total_horas'] ?? 0;
+
+if (!empty($permiso['hora_salida']) && !empty($permiso['hora_llegada'])) {
+    $h_salida = new DateTime($permiso['hora_salida']);
+    $h_llegada = new DateTime($permiso['hora_llegada']);
+    
+    $intervalo = $h_salida->diff($h_llegada);
+    $totalHorasRaw = $intervalo->h + ($intervalo->i / 60);
+
+    $limite_almuerzo_inicio = new DateTime($h_salida->format('Y-m-d') . ' 12:00:00');
+    $limite_almuerzo_fin = new DateTime($h_llegada->format('Y-m-d') . ' 13:00:00');
+
+    // Descontar la hora de almuerzo si el rango la cruza por completo
+    if ($h_salida <= $limite_almuerzo_inicio && $h_llegada >= $limite_almuerzo_fin) {
+        $totalHorasRaw = $totalHorasRaw - 1;
+    }
+    
+    if ($totalHorasRaw < 0) {
+        $totalHorasRaw = 0;
+    }
+    $totalHorasCalculadas = $totalHorasRaw;
+}
+
+$totalHorasFormateado = number_format((float)$totalHorasCalculadas, 2, '.', '');
+// ==========================================================
 
 $motivo = strtolower($permiso['clase_permiso_nombre'] ?? '');
 $tipoConcesion = strtolower($permiso['condicion_concesion_nombre'] ?? '');
@@ -150,8 +178,8 @@ $observaciones = $permiso['observaciones'] ?? '';
 
     <!-- BARRA DE ACCIONES -->
     <div class="toolbar">
-        <a href="lista_permisos.php" class="btn btn-secondary">← Volver al Listado</a>
-        <a href="imprimir_permiso.php?id=<?= $id ?>" class="btn btn-primary">Descargar Papeleta (PDF) ↓</a>
+        <a href="revisar.php" class="btn btn-secondary">← Volver al Listado</a>
+        <a href="imprimir_permiso.php?id=<?= $id ?>" class="btn btn-primary" target="_blank">Descargar Papeleta (PDF) ↓</a>
     </div>
 
     <!-- FORMATO BOLETA -->
@@ -176,7 +204,7 @@ $observaciones = $permiso['observaciones'] ?? '';
         <table class="solicitante-tabla">
             <tr>
                 <td width="68%" class="linea-puntos">
-                    &nbsp;<?= htmlspecialchars($permiso['empleado_nombre']) ?> &nbsp;&nbsp;&nbsp; (C.I: <?= htmlspecialchars($permiso['empleado_cedula']) ?>)
+                    &nbsp;<?= htmlspecialchars($permiso['empleado_nombre'] ?? '') ?> &nbsp;&nbsp;&nbsp; (C.I: <?= htmlspecialchars($permiso['empleado_cedula'] ?? '') ?>)
                 </td>
                 <td width="5%"></td>
                 <td width="27%" class="linea-puntos"></td>
@@ -221,7 +249,7 @@ $observaciones = $permiso['observaciones'] ?? '';
                     Día(s): <span class="campo-subrayado">&nbsp;<?= $fechaDetalle ?>&nbsp;</span><br>
                     Hora de Salida: <span class="campo-subrayado">&nbsp;<?= $horaSalida ?>&nbsp;</span> &nbsp;&nbsp;
                     Hora de Llegada: <span class="campo-subrayado">&nbsp;<?= $horaLlegada ?>&nbsp;</span><br>
-                    Total: &nbsp;&nbsp;&nbsp;&nbsp; Días: <span class="campo-subrayado">&nbsp;<?= $totalDias ?>&nbsp;</span> &nbsp;&nbsp;&nbsp;&nbsp; Horas: <span class="campo-subrayado">&nbsp;<?= $totalHoras ?>&nbsp;</span>
+                    Total: &nbsp;&nbsp;&nbsp;&nbsp; Días: <span class="campo-subrayado">&nbsp;<?= $totalDias ?>&nbsp;</span> &nbsp;&nbsp;&nbsp;&nbsp; Horas: <span class="campo-subrayado">&nbsp;<?= $totalHorasFormateado ?>&nbsp;</span>
                 </td>
                 <!-- LEGALIZADO POR TALENTO HUMANO -->
                 <td class="label-vertical">LEGALIZADO</td>

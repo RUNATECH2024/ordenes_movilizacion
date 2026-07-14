@@ -91,14 +91,44 @@ try {
 }
 
 $logoPath = realpath(__DIR__ . "/../assets/img/logo.png");
-$numeroPermiso = str_pad($permiso['id_permiso'] ?? $id, 7, "0", STR_PAD_LEFT);
+$numeroPermiso = str_pad($permiso['numero_permiso'] ?? $permiso['id_permiso'] ?? $id, 7, "0", STR_PAD_LEFT);
 
 // Formateo de variables de tiempo
 $fechaDetalle = $permiso['fecha_permiso'] ? date("d/m/Y", strtotime($permiso['fecha_permiso'])) : date("d/m/Y", strtotime($permiso['fecha_registro']));
-$horaSalida = $permiso['hora_salida'] ? date("H:i", strtotime($permiso['hora_salida'])) : '________';
-$horaLlegada = $permiso['hora_llegada'] ? date("H:i", strtotime($permiso['hora_llegada'])) : '________';
+$horaSalida = $permiso['hora_salida'] ? date("H:i", strtotime($permiso['hora_salida'])) : '____';
+$horaLlegada = $permiso['hora_llegada'] ? date("H:i", strtotime($permiso['hora_llegada'])) : '____';
 $totalDias = $permiso['total_dias'] ?? '0';
-$totalHoras = $permiso['total_horas'] ?? '0';
+
+// ==========================================================
+// CÁLCULO Y CORRECCIÓN AUTOMÁTICA DE HORAS
+// ==========================================================
+$totalHoras = $permiso['total_horas'] ?? 0;
+
+if ($permiso['hora_salida'] && $permiso['hora_llegada']) {
+    $h_salida = new DateTime($permiso['hora_salida']);
+    $h_llegada = new DateTime($permiso['hora_llegada']);
+    
+    $intervalo = $h_salida->diff($h_llegada);
+    $totalHorasCalculadas = $intervalo->h + ($intervalo->i / 60);
+
+    $limite_almuerzo_inicio = new DateTime($h_salida->format('Y-m-d') . ' 12:00:00');
+    $limite_almuerzo_fin = new DateTime($h_llegada->format('Y-m-d') . ' 13:00:00');
+
+    // Si el rango de tiempo pasa por la hora de almuerzo, restamos 1 hora
+    if ($h_salida <= $limite_almuerzo_inicio && $h_llegada >= $limite_almuerzo_fin) {
+        $totalHorasCalculadas = $totalHorasCalculadas - 1;
+    }
+    
+    if ($totalHorasCalculadas < 0) {
+        $totalHorasCalculadas = 0;
+    }
+
+    $totalHoras = $totalHorasCalculadas;
+}
+
+// Formateamos para que siempre muestre dos decimales legibles 
+$totalHorasFormateado = number_format((float)$totalHoras, 2, '.', '');
+// ==========================================================
 
 $motivo = strtolower($permiso['clase_permiso_nombre'] ?? '');
 $tipoConcesion = strtolower($permiso['condicion_concesion_nombre'] ?? '');
@@ -208,7 +238,7 @@ $html = "
                 Día(s): <span class='campo-subrayado'>&nbsp;$fechaDetalle&nbsp;</span><br><br>
                 Hora de Salida: <span class='campo-subrayado'>&nbsp;$horaSalida&nbsp;</span> &nbsp;&nbsp;
                 Hora de Llegada: <span class='campo-subrayado'>&nbsp;$horaLlegada&nbsp;</span><br><br>
-                Total: &nbsp;&nbsp;&nbsp;&nbsp; Días: <span class='campo-subrayado'>&nbsp;$totalDias&nbsp;</span> &nbsp;&nbsp;&nbsp;&nbsp; Horas: <span class='campo-subrayado'>&nbsp;$totalHoras&nbsp;</span>
+                Total: &nbsp;&nbsp;&nbsp;&nbsp; Días: <span class='campo-subrayado'>&nbsp;$totalDias&nbsp;</span> &nbsp;&nbsp;&nbsp;&nbsp; Horas: <span class='campo-subrayado'>&nbsp;$totalHorasFormateado&nbsp;</span>
             </td>
             <!-- LEGALIZADO POR TALENTO HUMANO -->
             <td class='label-vertical'>LEGALIZADO</td>

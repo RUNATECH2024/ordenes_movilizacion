@@ -10,15 +10,33 @@ if (!isset($_SESSION['usuario'])) {
 require_once __DIR__ . '/../includes/conexion.php';
 
 try {
-    // 1. CONTEO GENERAL DE ESTADOS, GÉNEROS Y DISCAPACIDADES
+    // 1. CONTEO GENERAL (Optimizado para evitar duplicidad de registros y calcular LOSEP/Código de Trabajo)
     $sql_conteos = "SELECT 
-                        COUNT(*) AS total,
-                        COUNT(CASE WHEN UPPER(estado) = 'ACTIVO' THEN 1 END) AS activos,
-                        COUNT(CASE WHEN UPPER(estado) = 'INACTIVO' THEN 1 END) AS inactivos,
-                        COUNT(CASE WHEN id_genero = 1 OR UPPER(id_genero::text) LIKE '%MASCULINO%' OR UPPER(id_genero::text) = 'H' THEN 1 END) AS hombres,
-                        COUNT(CASE WHEN id_genero = 2 OR UPPER(id_genero::text) LIKE '%FEMENINO%' OR UPPER(id_genero::text) = 'M' THEN 1 END) AS mujeres,
-                        (SELECT COUNT(DISTINCT id_empleado) FROM empleado_discapacidad) AS con_discapacidad
-                    FROM empleados";
+                        -- Total de empleados físicos únicos en la base de datos
+                        COUNT(DISTINCT e.id_empleado) AS total,
+                        
+                        -- Empleados únicos que tienen actualmente un contrato activo (true)
+                        COUNT(DISTINCT CASE WHEN hl.activo = true THEN e.id_empleado END) AS activos,
+                        
+                        -- Empleados inactivos reales (Total de empleados menos los que están activos)
+                        (COUNT(DISTINCT e.id_empleado) - COUNT(DISTINCT CASE WHEN hl.activo = true THEN e.id_empleado END)) AS inactivos,
+                        
+                        -- Conteo de hombres únicos
+                        COUNT(DISTINCT CASE WHEN e.id_genero = 1 OR UPPER(e.id_genero::text) LIKE '%MASCULINO%' OR UPPER(e.id_genero::text) = 'H' THEN e.id_empleado END) AS hombres,
+                        
+                        -- Conteo de mujeres únicas
+                        COUNT(DISTINCT CASE WHEN e.id_genero = 2 OR UPPER(e.id_genero::text) LIKE '%FEMENINO%' OR UPPER(e.id_genero::text) = 'M' THEN e.id_empleado END) AS mujeres,
+                        
+                        -- Conteo de discapacidad único
+                        (SELECT COUNT(DISTINCT id_empleado) FROM empleado_discapacidad) AS con_discapacidad,
+                        
+                        -- LOSEP activos únicos
+                        COUNT(DISTINCT CASE WHEN hl.id_tipo_nombramiento = 3 AND hl.activo = true THEN e.id_empleado END) AS losep,
+                        
+                        -- Código de Trabajo activos únicos
+                        COUNT(DISTINCT CASE WHEN hl.id_tipo_nombramiento = 1 AND hl.activo = true THEN e.id_empleado END) AS codigo_trabajo
+                    FROM empleados e
+                    LEFT JOIN historial_laboral hl ON e.id_empleado = hl.id_empleado";
     $conteos = $pdo->query($sql_conteos)->fetch(PDO::FETCH_ASSOC);
 
     // 2. OBTENER LAS DIRECCIONES Y EL CONTEO REAL DE EMPLEADOS ASOCIADOS
@@ -80,10 +98,12 @@ try {
         <div>
             <h2 class="dashboard-main-title">Panel de Control General (Dashboard)</h2>
             <p class="dashboard-subtitle">Resumen estructural en tiempo real del talento humano asignado</p>
+            <a href="../panel_administracion.php" class="btn btn-primary">← Panel</a>
         </div>
         <a href="index.php" class="btn btn-primary btn-dashboard-manage">⚙️ Gestionar Empleados</a>
     </div>
 
+    <!-- Grid de tarjetas de conteo -->
     <div class="pro-dashboard-grid">
         <div class="pro-card total">
             <div class="pro-card-info">
@@ -107,6 +127,22 @@ try {
                 <div class="numero"><?= $conteos['inactivos'] ?? 0 ?></div>
             </div>
             <div class="pro-card-icon icon-inactivos">❌</div>
+        </div>
+
+        <div class="pro-card losep" style="border-left: 5px solid #3b82f6;">
+            <div class="pro-card-info">
+                <h3>Personal LOSEP</h3>
+                <div class="numero"><?= $conteos['losep'] ?? 0 ?></div>
+            </div>
+            <div class="pro-card-icon icon-losep">📄</div>
+        </div>
+
+        <div class="pro-card codigo-trabajo" style="border-left: 5px solid #10b981;">
+            <div class="pro-card-info">
+                <h3>Código de Trabajo</h3>
+                <div class="numero"><?= $conteos['codigo_trabajo'] ?? 0 ?></div>
+            </div>
+            <div class="pro-card-icon icon-codigo">🛠️</div>
         </div>
 
         <div class="pro-card hombres">
@@ -134,6 +170,7 @@ try {
         </div>
     </div>
 
+    <!-- Buscador interactivo -->
     <div class="search-box-container">
         <input type="text" id="dashboardSearch" class="search-box" onkeyup="filtrarDirecciones()" placeholder="🔍 Buscar dirección o departamento macro por nombre...">
     </div>
@@ -143,6 +180,7 @@ try {
         <p class="section-help-text">💡 Haz clic sobre cualquier fila estructural para inspeccionar o contraer su nómina de funcionarios.</p>
     </div>
 
+    <!-- Contenedor del Acordeón de Direcciones -->
     <div id="direccionesContainer">
         <?php foreach ($direcciones_resumen as $dir): 
             $id_dir = $dir['id_direccion'];
@@ -159,7 +197,7 @@ try {
                     </span>
                 </div>
 
-                <div id="dir_<?= $id_dir ?>" class="dir-contenido">
+                <div id="dir_<?= $id_dir ?>" class="dir-contenido" style="display: none;">
                     <?php if (count($personal_area) > 0): ?>
                         <div class="dashboard-table-responsive">
                             <table class="dashboard-table">
