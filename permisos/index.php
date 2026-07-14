@@ -67,7 +67,7 @@ try {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SGA - Control de Vacaciones y Permisos</title>
-    <link rel="stylesheet" href="../assets/estilos.css?v=<?= time(); ?>">
+    <link class="styles" rel="stylesheet" href="../assets/estilos.css?v=<?= time(); ?>">
     <style>
         .resumen-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-top: 20px; }
         .card-kardex { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
@@ -77,12 +77,18 @@ try {
         .table-saldos tr:hover { background: #f1f5f9; }
         .saldo-positivo { color: #16a34a; font-weight: bold; }
         .saldo-alerta { color: #dc2626; font-weight: bold; }
+        
         .badge-mini { padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; text-transform: uppercase; display: inline-block; }
         .badge-mini-aprobado, .badge-mini-legalizado { background: #dcfce7; color: #15803d; }
         .badge-mini-pendiente { background: #fef3c7; color: #d97706; }
         .badge-mini-rechazado, .badge-mini-negado { background: #fee2e2; color: #b91c1c; }
-        .btn-view-ticket { display: block; text-align: center; background: #e2e8f0; color: #334155; text-decoration: none; padding: 6px; margin-top: 8px; border-radius: 4px; font-weight: bold; font-size: 12px; transition: 0.2s ease; }
+        
+        /* Botonera de acciones para las boletas */
+        .ticket-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .btn-view-ticket { flex: 1; text-align: center; background: #e2e8f0; color: #334155; text-decoration: none; padding: 8px; border-radius: 4px; font-weight: bold; font-size: 12px; transition: 0.2s ease; display: inline-block; }
         .btn-view-ticket:hover { background: #cbd5e1; color: #0f172a; }
+        .btn-edit-ticket { flex: 1; text-align: center; background: #fef3c7; color: #b45309; text-decoration: none; padding: 8px; border-radius: 4px; font-weight: bold; font-size: 12px; transition: 0.2s ease; display: inline-block; border: 1px solid #fde68a; }
+        .btn-edit-ticket:hover { background: #fde68a; color: #78350f; }
     </style>
 </head>
 <body>
@@ -169,7 +175,15 @@ try {
                             <p style="margin: 2px 0; color: #475569; font-size: 12px;">
                                 Resol: <strong><?= htmlspecialchars($r['condicion'], ENT_QUOTES, 'UTF-8') ?></strong>
                             </p>
-                            <a href="ver.php?id=<?= (int)$r['id_permiso'] ?>" class="btn-view-ticket">🔍 Ver Boleta Completa</a>
+                            
+                            <div class="ticket-actions">
+                                <a href="ver.php?id=<?= (int)$r['id_permiso'] ?>" class="btn-view-ticket">🔍 Ver</a>
+                                
+                                <!-- Se muestra el botón de Editar únicamente si la boleta está PENDIENTE -->
+                                <?php if ($estado === 'PENDIENTE'): ?>
+                                    <a href="editar.php?id=<?= (int)$r['id_permiso'] ?>" class="btn-edit-ticket">✏️ Editar</a>
+                                <?php endif; ?>
+                            </div>
                         </li>
                     <?php endforeach; ?>
                 <?php endif; ?>

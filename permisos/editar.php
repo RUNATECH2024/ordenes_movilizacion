@@ -18,13 +18,15 @@ if ($id_permiso <= 0) {
 }
 
 try {
-    // 1. Obtener los datos del permiso actual a editar
+    // 1. Obtener los datos del permiso usando la columna correcta: id_permiso
     $queryPermiso = $pdo->prepare("
-        SELECT p.*, e.id_jefatura, j.id_direccion 
+        SELECT p.*, c.id_jefatura, j.id_direccion 
         FROM permisos_ocasionales p
         INNER JOIN empleados e ON p.id_empleado = e.id_empleado
-        INNER JOIN jefaturas j ON e.id_jefatura = j.id_jefatura
-        WHERE p.id_permiso_ocasional = :id_permiso
+        INNER JOIN historial_laboral hl ON e.id_empleado = hl.id_empleado AND hl.activo = true
+        INNER JOIN cargos c ON hl.id_cargo = c.id_cargo
+        INNER JOIN jefaturas j ON c.id_jefatura = j.id_jefatura
+        WHERE p.id_permiso = :id_permiso
         LIMIT 1
     ");
     $queryPermiso->execute([':id_permiso' => $id_permiso]);
@@ -34,31 +36,11 @@ try {
         die("Permiso no encontrado.");
     }
 
-    // 2. Catálogos iniciales normalizados
-    $direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre ASC")->fetchAll(PDO::FETCH_ASSOC);
-    $clases = $pdo->query("SELECT id_clase_permiso, nombre FROM clases_permiso WHERE estado = 'ACTIVO' ORDER BY id_clase_permiso ASC")->fetchAll(PDO::FETCH_ASSOC);
-    $condiciones = $pdo->query("SELECT id_condicion, nombre FROM condiciones_concesion WHERE estado = 'ACTIVO' ORDER BY id_condicion ASC")->fetchAll(PDO::FETCH_ASSOC);
-
-    // Cargar catálogos dependientes del registro actual para que aparezcan seleccionados al cargar
-    $jefaturas_actuales = [];
-    if ($permiso['id_direccion']) {
-        $stmtJef = $pdo->prepare("SELECT id_jefatura, nombre FROM jefaturas WHERE id_direccion = :id_dir AND estado = 'ACTIVO' ORDER BY nombre ASC");
-        $stmtJef->execute([':id_dir' => $permiso['id_direccion']]);
-        $jefaturas_actuales = $stmtJef->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    $empleados_actuales = [];
-    if ($permiso['id_jefatura']) {
-        $stmtEmp = $pdo->prepare("SELECT id_empleado, primer_nombre, primer_apellido, cedula FROM empleados WHERE id_jefatura = :id_jef ORDER BY primer_apellido ASC");
-        $stmtEmp->execute([':id_jef' => $permiso['id_jefatura']]);
-        $empleados_actuales = $stmtEmp->fetchAll(PDO::FETCH_ASSOC);
-    }
-
 } catch (Exception $e) {
     $mensaje = "<div class='alert error'>Error al cargar datos: " . $e->getMessage() . "</div>";
 }
 
-// Procesar la actualización del formulario
+// 2. Procesar la actualización
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     try {
         $pdo->beginTransaction();
@@ -67,104 +49,104 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $id_jefatura = (int)$_POST['id_jefatura'];
         $id_direccion = (int)$_POST['id_direccion'];
 
-        // 1. OBTENER EL JEFE INMEDIATO ACTIVO DE LA JEFATURA SELECCIONADA
-        $queryJefe = $pdo->prepare("
-            SELECT id_empleado_jefe FROM historial_jefaturas 
-            WHERE id_jefatura = :id_jefatura AND estado = 'ACTIVO' LIMIT 1
-        ");
+        // Obtener responsables (Jefe y Director)
+        $queryJefe = $pdo->prepare("SELECT id_empleado_jefe FROM historial_jefaturas WHERE id_jefatura = :id_jefatura AND estado = 'ACTIVO' LIMIT 1");
         $queryJefe->execute([':id_jefatura' => $id_jefatura]);
-        $jefeRes = $queryJefe->fetch(PDO::FETCH_ASSOC);
-        $id_jefe_valida = $jefeRes['id_empleado_jefe'] ?? null;
+        $id_jefe_valida = $queryJefe->fetchColumn() ?: null;
 
-        // 2. OBTENER EL DIRECTOR ACTIVO DE LA DIRECCIÓN SELECCIONADA
-        $queryDirector = $pdo->prepare("
-            SELECT id_empleado FROM directores 
-            WHERE id_direccion = :id_direccion AND estado = 'ACTIVO' LIMIT 1
-        ");
+        $queryDirector = $pdo->prepare("SELECT id_empleado FROM directores WHERE id_direccion = :id_direccion AND estado = 'ACTIVO' LIMIT 1");
         $queryDirector->execute([':id_direccion' => $id_direccion]);
-        $dirRes = $queryDirector->fetch(PDO::FETCH_ASSOC);
-        $id_director_legaliza = $dirRes['id_empleado'] ?? null;
+        $id_director_legaliza = $queryDirector->fetchColumn() ?: null;
 
-        // --- CÁLCULO DE HORAS DESCONTANDO JORNADA DE ALMUERZO (12:00 a 13:00) ---
-        $fecha_permiso_str = $_POST['fecha_permiso'];
-        
-        $salida_completa = new DateTime($fecha_permiso_str . ' ' . $_POST['hora_salida']);
-        $llegada_completa = new DateTime($fecha_permiso_str . ' ' . $_POST['hora_llegada']);
-
+        // Cálculo de horas
+        $salida_completa = new DateTime($_POST['fecha_permiso'] . ' ' . $_POST['hora_salida']);
+        $llegada_completa = new DateTime($_POST['fecha_permiso'] . ' ' . $_POST['hora_llegada']);
         $segundos_totales = $llegada_completa->getTimestamp() - $salida_completa->getTimestamp();
-
-        if ($segundos_totales < 0) {
-            throw new Exception("La hora de llegada no puede ser anterior a la hora de salida.");
-        }
-
-        // Definir límites de la hora de almuerzo para ese día
-        $almuerzo_inicio = new DateTime($fecha_permiso_str . ' 12:00:00');
-        $almuerzo_fin = new DateTime($fecha_permiso_str . ' 13:00:00');
-
-        // Calcular si existe intersección (solapamiento) con el almuerzo
+        
+        $almuerzo_inicio = new DateTime($_POST['fecha_permiso'] . ' 12:00:00');
+        $almuerzo_fin = new DateTime($_POST['fecha_permiso'] . ' 13:00:00');
         $interseccion_inicio = max($salida_completa, $almuerzo_inicio);
         $interseccion_fin = min($llegada_completa, $almuerzo_fin);
+        $segundos_almuerzo = ($interseccion_inicio < $interseccion_fin) ? ($interseccion_fin->getTimestamp() - $interseccion_inicio->getTimestamp()) : 0;
+        $total_horas = max(0, ($segundos_totales - $segundos_almuerzo) / 3600);
 
-        $segundos_almuerzo = 0;
-        if ($interseccion_inicio < $interseccion_fin) {
-            // El permiso coincide total o parcialmente con el almuerzo, restamos esta diferencia
-            $segundos_almuerzo = $interseccion_fin->getTimestamp() - $interseccion_inicio->getTimestamp();
-        }
-
-        $segundos_efectivos = $segundos_totales - $segundos_almuerzo;
-        $total_horas = max(0, $segundos_efectivos / 3600);
-        // ------------------------------------------------------------------------
-
+        // Update usando la columna correcta: id_permiso
         $sql_upd = "UPDATE permisos_ocasionales SET 
-                        numero_permiso = :numero_permiso, 
-                        id_empleado = :id_empleado, 
-                        id_clase_permiso = :id_clase_permiso, 
-                        id_condicion = :id_condicion, 
-                        fecha_permiso = :fecha_permiso, 
-                        hora_salida = :hora_salida, 
-                        hora_llegada = :hora_llegada, 
-                        total_dias = :total_dias, 
-                        total_horas = :total_horas, 
-                        observaciones = :observaciones,
-                        id_jefe_valida = :id_jefe_valida, 
-                        id_director_legaliza = :id_director_legaliza
-                    WHERE id_permiso_ocasional = :id_permiso";
+                        numero_permiso = :numero_permiso, id_empleado = :id_empleado, 
+                        id_clase_permiso = :id_clase_permiso, id_condicion = :id_condicion, 
+                        fecha_permiso = :fecha_permiso, hora_salida = :hora_salida, 
+                        hora_llegada = :hora_llegada, total_dias = :total_dias, 
+                        total_horas = :total_horas, observaciones = :observaciones,
+                        id_jefe_valida = :id_jefe_valida, id_director_legaliza = :id_director_legaliza
+                    WHERE id_permiso = :id_permiso";
         
         $stmt = $pdo->prepare($sql_upd);
         $stmt->execute([
-            ':numero_permiso'       => $_POST['numero_permiso'],
-            ':id_empleado'          => $id_empleado,
-            ':id_clase_permiso'     => (int)$_POST['id_clase_permiso'],
-            ':id_condicion'         => (int)$_POST['id_condicion'],
-            ':fecha_permiso'        => $_POST['fecha_permiso'],
-            ':hora_salida'          => $_POST['hora_salida'],
-            ':hora_llegada'         => $_POST['hora_llegada'],
-            ':total_dias'           => (int)$_POST['total_dias'] ?: 0,
-            ':total_horas'          => $total_horas,
-            ':observaciones'        => $_POST['observaciones'] ?: null,
-            ':id_jefe_valida'       => $id_jefe_valida,
-            ':id_director_legaliza' => $id_director_legaliza,
-            ':id_permiso'           => $id_permiso
+            ':numero_permiso' => $_POST['numero_permiso'], ':id_empleado' => $id_empleado,
+            ':id_clase_permiso' => (int)$_POST['id_clase_permiso'], ':id_condicion' => (int)$_POST['id_condicion'],
+            ':fecha_permiso' => $_POST['fecha_permiso'], ':hora_salida' => $_POST['hora_salida'],
+            ':hora_llegada' => $_POST['hora_llegada'], ':total_dias' => (int)$_POST['total_dias'] ?: 0,
+            ':total_horas' => $total_horas, ':observaciones' => $_POST['observaciones'] ?: null,
+            ':id_jefe_valida' => $id_jefe_valida, ':id_director_legaliza' => $id_director_legaliza,
+            ':id_permiso' => $id_permiso
         ]);
 
         $pdo->commit();
-        
-        // Recargar el permiso actualizado en pantalla
         $queryPermiso->execute([':id_permiso' => $id_permiso]);
         $permiso = $queryPermiso->fetch(PDO::FETCH_ASSOC);
-
-        $mensaje = "<div class='alert success'>¡Permiso Ocasional Nº " . htmlspecialchars($_POST['numero_permiso']) . " actualizado correctamente! Horas calculadas (sin almuerzo): " . number_format($total_horas, 2) . " hrs.</div>";
-    } catch (PDOException $e) {
-        $pdo->rollBack();
-        if ($e->getCode() == '23505') {
-            $mensaje = "<div class='alert error'>⚠️ El número de permiso ya se encuentra registrado en el sistema.</div>";
-        } else {
-            $mensaje = "<div class='alert error'>Error de base de datos: " . $e->getMessage() . "</div>";
-        }
+        $mensaje = "<div class='alert success'>¡Actualizado correctamente! Horas: " . number_format($total_horas, 2) . "</div>";
     } catch (Exception $e) {
         $pdo->rollBack();
-        $mensaje = "<div class='alert error'>Error general: " . $e->getMessage() . "</div>";
+        $mensaje = "<div class='alert error'>Error: " . $e->getMessage() . "</div>";
     }
+}
+
+// Variables para formulario
+$valores_formulario = [
+    'id_direccion' => $_POST['id_direccion'] ?? $permiso['id_direccion'] ?? '',
+    'id_jefatura' => $_POST['id_jefatura'] ?? $permiso['id_jefatura'] ?? '',
+    'id_empleado' => $_POST['id_empleado'] ?? $permiso['id_empleado'] ?? '',
+    'numero_permiso' => $_POST['numero_permiso'] ?? $permiso['numero_permiso'] ?? '',
+    'id_clase_permiso' => $_POST['id_clase_permiso'] ?? $permiso['id_clase_permiso'] ?? '',
+    'fecha_permiso' => $_POST['fecha_permiso'] ?? $permiso['fecha_permiso'] ?? '',
+    'total_dias' => $_POST['total_dias'] ?? $permiso['total_dias'] ?? '0',
+    'hora_salida' => $_POST['hora_salida'] ?? $permiso['hora_salida'] ?? '',
+    'hora_llegada' => $_POST['hora_llegada'] ?? $permiso['hora_llegada'] ?? '',
+    'id_condicion' => $_POST['id_condicion'] ?? $permiso['id_condicion'] ?? '',
+    'observaciones' => $_POST['observaciones'] ?? $permiso['observaciones'] ?? ''
+];
+
+// Carga catálogos... (resto del código igual)
+
+// 4. Carga de catálogos basada en los valores determinados en el paso anterior
+try {
+    $direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $clases = $pdo->query("SELECT id_clase_permiso, nombre FROM clases_permiso WHERE estado = 'ACTIVO' ORDER BY id_clase_permiso ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $condiciones = $pdo->query("SELECT id_condicion, nombre FROM condiciones_concesion WHERE estado = 'ACTIVO' ORDER BY id_condicion ASC")->fetchAll(PDO::FETCH_ASSOC);
+
+    $jefaturas_actuales = [];
+    if (!empty($valores_formulario['id_direccion'])) {
+        $stmtJef = $pdo->prepare("SELECT id_jefatura, nombre FROM jefaturas WHERE id_direccion = :id_dir AND estado = 'ACTIVO' ORDER BY nombre ASC");
+        $stmtJef->execute([':id_dir' => $valores_formulario['id_direccion']]);
+        $jefaturas_actuales = $stmtJef->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    $empleados_actuales = [];
+    if (!empty($valores_formulario['id_jefatura'])) {
+        // Obtenemos los empleados que pertenecen a esta jefatura a través de su historial laboral y cargo actual
+        $stmtEmp = $pdo->prepare("
+            SELECT e.id_empleado, e.primer_nombre, e.primer_apellido, e.cedula 
+            FROM empleados e
+            INNER JOIN historial_laboral hl ON e.id_empleado = hl.id_empleado AND hl.activo = true
+            INNER JOIN cargos c ON hl.id_cargo = c.id_cargo
+            WHERE c.id_jefatura = :id_jef
+            ORDER BY e.primer_apellido ASC
+        ");
+        $stmtEmp->execute([':id_jef' => $valores_formulario['id_jefatura']]);
+        $empleados_actuales = $stmtEmp->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    $mensaje .= "<div class='alert error'>Error al estructurar catálogos: " . $e->getMessage() . "</div>";
 }
 ?>
 
@@ -201,7 +183,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <form action="" method="POST" id="form-permiso">
         <div class="form-group" style="margin-bottom: 15px;">
             <label>Número de Permiso (Físico) <span class="required">*</span></label>
-            <input type="text" name="numero_permiso" value="<?= htmlspecialchars($permiso['numero_permiso']) ?>" required>
+            <input type="text" name="numero_permiso" value="<?= htmlspecialchars($valores_formulario['numero_permiso']) ?>" required>
         </div>
 
         <div class="grid-3">
@@ -210,7 +192,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 <select name="id_direccion" id="id_direccion" required>
                     <option value="">-- Seleccione Dirección --</option>
                     <?php foreach($direcciones as $dir): ?>
-                        <option value="<?= $dir['id_direccion'] ?>" <?= ($dir['id_direccion'] == $permiso['id_direccion']) ? 'selected' : '' ?>>
+                        <option value="<?= $dir['id_direccion'] ?>" <?= ($dir['id_direccion'] == $valores_formulario['id_direccion']) ? 'selected' : '' ?>>
                             <?= htmlspecialchars($dir['nombre']) ?>
                         </option>
                     <?php endforeach; ?>
@@ -222,7 +204,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 <select name="id_jefatura" id="id_jefatura" required>
                     <option value="">-- Seleccione Jefatura --</option>
                     <?php foreach($jefaturas_actuales as $jef): ?>
-                        <option value="<?= $jef['id_jefatura'] ?>" <?= ($jef['id_jefatura'] == $permiso['id_jefatura']) ? 'selected' : '' ?>>
+                        <option value="<?= $jef['id_jefatura'] ?>" <?= ($jef['id_jefatura'] == $valores_formulario['id_jefatura']) ? 'selected' : '' ?>>
                             <?= htmlspecialchars($jef['nombre']) ?>
                         </option>
                     <?php endforeach; ?>
@@ -234,7 +216,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 <select name="id_empleado" id="id_empleado" required>
                     <option value="">-- Seleccione Colaborador --</option>
                     <?php foreach($empleados_actuales as $emp): ?>
-                        <option value="<?= $emp['id_empleado'] ?>" <?= ($emp['id_empleado'] == $permiso['id_empleado']) ? 'selected' : '' ?>>
+                        <option value="<?= $emp['id_empleado'] ?>" <?= ($emp['id_empleado'] == $valores_formulario['id_empleado']) ? 'selected' : '' ?>>
                             <?= htmlspecialchars($emp['primer_apellido'] . ' ' . $emp['primer_nombre'] . ' (' . $emp['cedula'] . ')') ?>
                         </option>
                     <?php endforeach; ?>
@@ -247,7 +229,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <div class="radio-group">
                 <?php foreach($clases as $cl): ?>
                     <div class="radio-item">
-                        <input type="radio" name="id_clase_permiso" value="<?= $cl['id_clase_permiso'] ?>" id="clase_<?= $cl['id_clase_permiso'] ?>" <?= ($cl['id_clase_permiso'] == $permiso['id_clase_permiso']) ? 'checked' : '' ?> required>
+                        <input type="radio" name="id_clase_permiso" value="<?= $cl['id_clase_permiso'] ?>" id="clase_<?= $cl['id_clase_permiso'] ?>" <?= ($cl['id_clase_permiso'] == $valores_formulario['id_clase_permiso']) ? 'checked' : '' ?> required>
                         <label for="clase_<?= $cl['id_clase_permiso'] ?>"><?= htmlspecialchars($cl['nombre']) ?></label>
                     </div>
                 <?php endforeach; ?>
@@ -258,19 +240,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <div class="grid-2">
             <div class="form-group">
                 <label>Fecha del Permiso <span class="required">*</span></label>
-                <input type="date" name="fecha_permiso" value="<?= htmlspecialchars($permiso['fecha_permiso']) ?>" required>
+                <input type="date" name="fecha_permiso" value="<?= htmlspecialchars($valores_formulario['fecha_permiso']) ?>" required>
             </div>
             <div class="form-group">
                 <label>Días Totales <span class="required">*</span></label>
-                <input type="number" name="total_dias" value="<?= htmlspecialchars($permiso['total_dias']) ?>" min="0" required>
+                <input type="number" name="total_dias" value="<?= htmlspecialchars($valores_formulario['total_dias']) ?>" min="0" required>
             </div>
             <div class="form-group">
                 <label>Hora de Salida <span class="required">*</span></label>
-                <input type="time" name="hora_salida" value="<?= htmlspecialchars(substr($permiso['hora_salida'], 0, 5)) ?>" required>
+                <input type="time" name="hora_salida" value="<?= htmlspecialchars(substr($valores_formulario['hora_salida'], 0, 5)) ?>" required>
             </div>
             <div class="form-group">
                 <label>Hora de Llegada <span class="required">*</span></label>
-                <input type="time" name="hora_llegada" value="<?= htmlspecialchars(substr($permiso['hora_llegada'], 0, 5)) ?>" required>
+                <input type="time" name="hora_llegada" value="<?= htmlspecialchars(substr($valores_formulario['hora_llegada'], 0, 5)) ?>" required>
             </div>
         </div>
 
@@ -279,7 +261,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <div class="radio-group">
                 <?php foreach($condiciones as $cond): ?>
                     <div class="radio-item">
-                        <input type="radio" name="id_condicion" value="<?= $cond['id_condicion'] ?>" id="cond_<?= $cond['id_condicion'] ?>" <?= ($cond['id_condicion'] == $permiso['id_condicion']) ? 'checked' : '' ?> required>
+                        <input type="radio" name="id_condicion" value="<?= $cond['id_condicion'] ?>" id="cond_<?= $cond['id_condicion'] ?>" <?= ($cond['id_condicion'] == $valores_formulario['id_condicion']) ? 'checked' : '' ?> required>
                         <label for="cond_<?= $cond['id_condicion'] ?>"><?= htmlspecialchars($cond['nombre']) ?></label>
                     </div>
                 <?php endforeach; ?>
@@ -288,7 +270,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         <h3>Observaciones y Justificaciones (Oficina de Personal)</h3>
         <div class="form-group">
-            <textarea name="observaciones" rows="3" placeholder="Ej. Compensación por el día lunes trabajado..."><?= htmlspecialchars($permiso['observaciones'] ?? '') ?></textarea>
+            <textarea name="observaciones" rows="3" placeholder="Ej. Compensación por el día lunes trabajado..."><?= htmlspecialchars($valores_formulario['observaciones'] ?? '') ?></textarea>
         </div>
 
         <button type="submit" class="btn btn-primary" style="width: 100%; padding: 15px; font-weight: bold; font-size: 16px; cursor: pointer; background-color: #ffc107; color: #212529; border: none; border-radius: 4px;">💾 Actualizar Registro y Recalcular</button>
