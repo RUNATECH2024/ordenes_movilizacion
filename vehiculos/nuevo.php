@@ -13,12 +13,7 @@ if (!isset($pdo)) {
 }
 
 try {
-    // 1. Obtener lista de choferes activos
-    $sql_choferes = "SELECT id_chofer, nombres, apellidos FROM choferes ORDER BY nombres ASC";
-    $stmt_choferes = $pdo->query($sql_choferes);
-    $choferes = $stmt_choferes->fetchAll(PDO::FETCH_ASSOC);
-
-    // 2. Obtener lista de direcciones institucionales activas
+    // Obtener lista de direcciones institucionales activas
     $sql_direcciones = "SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre ASC";
     $stmt_direcciones = $pdo->query($sql_direcciones);
     $direcciones = $stmt_direcciones->fetchAll(PDO::FETCH_ASSOC);
@@ -102,18 +97,6 @@ try {
                 <?php foreach ($direcciones as $dir): ?>
                     <option value="<?= $dir['id_direccion'] ?>">
                         <?= htmlspecialchars($dir['nombre']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
-        <div class="form-group ancho-completo">
-            <label>Chofer asignado:</label>
-            <select name="id_chofer">
-                <option value="">Seleccione un Chofer</option>
-                <?php foreach ($choferes as $chofer): ?>
-                    <option value="<?= $chofer['id_chofer'] ?>">
-                        <?= htmlspecialchars($chofer['nombres'] . " " . $chofer['apellidos']) ?>
                     </option>
                 <?php endforeach; ?>
             </select>

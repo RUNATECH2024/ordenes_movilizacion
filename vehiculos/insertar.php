@@ -24,8 +24,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $anio = !empty($_POST['anio']) ? (int)$_POST['anio'] : null;
     $descripcion_vehiculo = !empty($_POST['descripcion_vehiculo']) ? trim($_POST['descripcion_vehiculo']) : null;
 
-    // Relaciones (Chofer y Dirección)
-    $id_chofer = !empty($_POST['id_chofer']) ? (int)$_POST['id_chofer'] : null;
+    // Relación con la Dirección Institucional.
+    // El chofer ya no se asigna desde este módulo; se asigna desde Choferes.
     $id_direccion = !empty($_POST['id_direccion']) ? (int)$_POST['id_direccion'] : null;
 
     //==========================
@@ -67,7 +67,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     color,
                     anio,
                     descripcion_vehiculo,
-                    id_chofer,
                     id_direccion,
                     foto_vehiculo
                 ) VALUES (
@@ -83,7 +82,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     :color,
                     :anio,
                     :descripcion_vehiculo,
-                    :id_chofer,
                     :id_direccion,
                     :foto_vehiculo
                 )";
@@ -104,7 +102,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             ':color' => $color,
             ':anio' => $anio,
             ':descripcion_vehiculo' => $descripcion_vehiculo,
-            ':id_chofer' => $id_chofer,
             ':id_direccion' => $id_direccion,
             ':foto_vehiculo' => $foto_vehiculo
         ]);

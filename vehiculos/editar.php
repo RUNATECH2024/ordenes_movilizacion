@@ -24,11 +24,7 @@ try {
         die("Vehículo no encontrado.");
     }
 
-    // 2. Obtener lista de choferes para el selector
-    $stmtChoferes = $pdo->query("SELECT id_chofer, nombres, apellidos FROM choferes ORDER BY nombres");
-    $choferes = $stmtChoferes->fetchAll(PDO::FETCH_ASSOC);
-
-    // 3. Obtener lista de direcciones institucionales activas para el selector
+    // Obtener lista de direcciones institucionales activas para el selector
     $stmtDirecciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre");
     $direcciones = $stmtDirecciones->fetchAll(PDO::FETCH_ASSOC);
 
@@ -116,19 +112,6 @@ try {
                     <?php $selectedDir = (($vehiculo['id_direccion'] ?? null) == $d['id_direccion']) ? 'selected' : ''; ?>
                     <option value="<?= $d['id_direccion'] ?>" <?= $selectedDir ?>>
                         <?= htmlspecialchars($d['nombre']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
-        <div class="form-group ancho-completo" style="grid-column: span 2;">
-            <label>Chofer asignado:</label>
-            <select name="id_chofer">
-                <option value="">Seleccione un Chofer</option>
-                <?php foreach($choferes as $c): ?>
-                    <?php $selectedChofer = (($vehiculo['id_chofer'] ?? null) == $c['id_chofer']) ? 'selected' : ''; ?>
-                    <option value="<?= $c['id_chofer'] ?>" <?= $selectedChofer ?>>
-                        <?= htmlspecialchars($c['nombres'] . ' ' . $c['apellidos']) ?>
                     </option>
                 <?php endforeach; ?>
             </select>

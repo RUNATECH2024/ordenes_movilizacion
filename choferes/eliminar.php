@@ -1,13 +1,11 @@
 <?php
-require_once '../includes/conexion.php';
+session_start();
 
-$id = $_GET['id'] ?? null;
-
-if ($id && is_numeric($id)) {
-    $stmt = $pdo->prepare("DELETE FROM choferes WHERE id_chofer = ?");
-    $stmt->execute([$id]);
+if (!isset($_SESSION['usuario'])) {
+    header("Location: ../auth/login.php");
+    exit;
 }
 
-header('Location: index.php');
+// Alta, edición y eliminación de personas se realizan desde Empleados / Personal.
+header('Location: index.php?mensaje=gestion_empleados');
 exit;
-?>

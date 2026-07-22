@@ -7,7 +7,8 @@ if (!isset($_SESSION['usuario'])) {
     exit;
 }
 
-require_once __DIR__ . '/../includes/conexion.php'; 
+require_once __DIR__ . '/../includes/conexion.php';
+require_once __DIR__ . '/funciones_chofer.php';
 
 $mensaje = "";
 $id_empleado = isset($_GET['id']) ? (int)$_GET['id'] : 0;
@@ -24,7 +25,7 @@ try {
                          ci.correo AS correo_inst, ci.usuario AS usuario_inst,
                          ud.id_provincia, ud.id_ciudades AS id_ciudad, ud.id_parroquia, ud.barrio, ud.calle_principal, ud.calle_secundaria, ud.numero_casa, ud.referencia,
                          hl.id_cargo, hl.id_tipo_nombramiento, hl.fecha_inicio AS fecha_ingreso,
-                         c.id_jefatura, j.id_direccion,
+                         c.nombre AS cargo_nombre, c.id_jefatura, j.id_direccion,
                          ed.id_discapacidad, ed.porcentaje, ed.numero_carnet, ed.observaciones AS observaciones_disc
                   FROM empleados e
                   LEFT JOIN contacto_personal cp ON e.id_empleado = cp.id_empleado
@@ -53,6 +54,13 @@ try {
     
     $provincias = $pdo->query("SELECT id_provincia, nombre FROM provincias ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     $direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
+    $cargos_globales = $pdo->query("
+        SELECT id_cargo, nombre
+        FROM cargos
+        WHERE id_jefatura IS NULL
+          AND UPPER(COALESCE(estado, 'ACTIVO')) = 'ACTIVO'
+        ORDER BY nombre
+    ")->fetchAll(PDO::FETCH_ASSOC);
 
     // Cargar catálogos dinámicos dependientes según el estado actual del empleado
     $ciudades = [];
@@ -76,9 +84,15 @@ try {
         $jefaturas = $stmt_jef->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    $cargos = [];
+    $cargos = $cargos_globales;
     if (!empty($emp['id_jefatura'])) {
-        $stmt_crg = $pdo->prepare("SELECT id_cargo, nombre FROM cargos WHERE id_jefatura = ? ORDER BY nombre");
+        $stmt_crg = $pdo->prepare("
+            SELECT id_cargo, nombre
+            FROM cargos
+            WHERE UPPER(COALESCE(estado, 'ACTIVO')) = 'ACTIVO'
+              AND (id_jefatura = ? OR id_jefatura IS NULL)
+            ORDER BY CASE WHEN id_jefatura IS NULL THEN 0 ELSE 1 END, nombre
+        ");
         $stmt_crg->execute([$emp['id_jefatura']]);
         $cargos = $stmt_crg->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -158,9 +172,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         // --- PASO 5: Historial Laboral y Sincronización Estructural ---
         if (!empty($_POST['id_cargo'])) {
-            $id_cargo = (int)$_POST['id_cargo'];
-            $id_direccion = (int)$_POST['id_direccion'];
-            $id_jefatura = (int)$_POST['id_jefatura'];
+            $id_cargo = (int)($_POST['id_cargo'] ?? 0);
+            $cargo_info = obtenerCargoPorId($pdo, $id_cargo);
+            if (!$cargo_info) {
+                throw new Exception('El cargo seleccionado no existe o está inactivo.');
+            }
+
+            $nombre_cargo_upper = normalizarTextoCargo($cargo_info['nombre']);
+            $es_chofer_nuevo = esCargoChofer($cargo_info['nombre']);
+            $era_chofer = esCargoChofer($emp['cargo_nombre'] ?? '');
+            $id_direccion = $es_chofer_nuevo ? 0 : (int)($_POST['id_direccion'] ?? 0);
+            $id_jefatura = $es_chofer_nuevo ? 0 : (int)($_POST['id_jefatura'] ?? 0);
+
+            if (!$es_chofer_nuevo && ($id_direccion <= 0 || $id_jefatura <= 0)) {
+                throw new Exception('Debe seleccionar la Dirección y la Jefatura para el cargo elegido.');
+            }
 
             // Saber si cambió de cargo
             if ($emp['id_cargo'] != $id_cargo) {
@@ -185,14 +211,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $pdo->prepare("UPDATE directores SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_empleado = ? AND estado = 'ACTIVO'")->execute([$id_empleado]);
                 $pdo->prepare("UPDATE historial_jefaturas SET estado = 'INACTIVO', fecha_fin = CURRENT_DATE WHERE id_empleado_jefe = ? AND estado = 'ACTIVO'")->execute([$id_empleado]);
                 
-                // CORRECCIÓN QUIRÚRGICA: Mapeo correcto para la tabla de choferes usando 'cedula' en lugar de 'id_empleado'
-                $pdo->prepare("UPDATE choferes SET estado = 'INACTIVO' WHERE cedula = ? AND estado = 'ACTIVO'")->execute([$emp['cedula']]);
+                // Si el empleado deja de ser chofer, se libera también su vehículo.
+                if ($era_chofer && !$es_chofer_nuevo) {
+                    desactivarChoferDeEmpleado($pdo, $id_empleado, $emp['cedula']);
+                }
 
                 // 4. Evaluar el nuevo cargo para asignación automática de mandos o roles especiales
-                $stmt_chk = $pdo->prepare("SELECT nombre FROM cargos WHERE id_cargo = ?");
-                $stmt_chk->execute([$id_cargo]);
-                $cargo_info = $stmt_chk->fetch(PDO::FETCH_ASSOC);
-                $nombre_cargo_upper = strtoupper($cargo_info['nombre'] ?? '');
 
                 // ===============================
                 // NUEVO CARGO: DIRECTOR
@@ -221,14 +245,25 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 // ===============================
                 // NUEVO CARGO: CHOFER / CONDUCTOR (CORREGIDO)
                 // ===============================
-                else if (strpos($nombre_cargo_upper, 'CHOFER') !== false || strpos($nombre_cargo_upper, 'CONDUCTOR') !== false) {
-                    $sql_chofer = "INSERT INTO choferes (cedula, nombres, apellidos, estado, fecha_ingreso, cargo) VALUES (?, ?, ?, 'ACTIVO', CURRENT_DATE, ?)";
-                    $pdo->prepare($sql_chofer)->execute([
-                        $_POST['cedula'], 
-                        $_POST['primer_nombre'] . ' ' . $_POST['segundo_nombre'], 
-                        $_POST['primer_apellido'] . ' ' . $_POST['segundo_apellido'],
-                        $cargo_info['nombre']
-                    ]);
+                else if ($es_chofer_nuevo) {
+                    $stmt_sangre = $pdo->prepare("SELECT nombre FROM tipos_sangre WHERE id_tipo_sangre = ?");
+                    $stmt_sangre->execute([!empty($_POST['id_tipo_sangre']) ? (int)$_POST['id_tipo_sangre'] : 0]);
+                    $tipo_sangre_nombre = $stmt_sangre->fetchColumn() ?: null;
+
+                    sincronizarChoferDesdeEmpleado($pdo, $id_empleado, [
+                        'cedula' => $_POST['cedula'],
+                        'primer_nombre' => $_POST['primer_nombre'],
+                        'segundo_nombre' => $_POST['segundo_nombre'] ?? '',
+                        'primer_apellido' => $_POST['primer_apellido'],
+                        'segundo_apellido' => $_POST['segundo_apellido'] ?? '',
+                        'fecha_nacimiento' => $_POST['fecha_nacimiento'],
+                        'celular' => $_POST['celular'] ?? '',
+                        'telefono' => $_POST['telefono'] ?? '',
+                        'correo_personal' => $_POST['correo_personal'] ?? '',
+                        'tipo_sangre_nombre' => $tipo_sangre_nombre,
+                        'fecha_ingreso' => $_POST['fecha_ingreso'] ?? date('Y-m-d'),
+                        'foto' => $nombre_foto
+                    ], isset($_POST['estado_laboral']) ? 'ACTIVO' : 'INACTIVO');
                 }
 
                 // Volvemos a encender los triggers estructurales obligatoriamente
@@ -241,6 +276,32 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $sql_upd_hist = "UPDATE historial_laboral SET id_tipo_nombramiento = ?, fecha_inicio = ? 
                                  WHERE id_empleado = ? AND activo = TRUE";
                 $pdo->prepare($sql_upd_hist)->execute([$_POST['id_tipo_nombramiento'] ?: null, $_POST['fecha_ingreso'], $id_empleado]);
+            }
+        }
+
+        // Mantener el perfil técnico de chofer sincronizado aun cuando el cargo no cambió.
+        if (!empty($_POST['id_cargo'])) {
+            if ($es_chofer_nuevo) {
+                $stmt_sangre_sync = $pdo->prepare("SELECT nombre FROM tipos_sangre WHERE id_tipo_sangre = ?");
+                $stmt_sangre_sync->execute([!empty($_POST['id_tipo_sangre']) ? (int)$_POST['id_tipo_sangre'] : 0]);
+                $tipo_sangre_sync = $stmt_sangre_sync->fetchColumn() ?: null;
+
+                sincronizarChoferDesdeEmpleado($pdo, $id_empleado, [
+                    'cedula' => $_POST['cedula'],
+                    'primer_nombre' => $_POST['primer_nombre'],
+                    'segundo_nombre' => $_POST['segundo_nombre'] ?? '',
+                    'primer_apellido' => $_POST['primer_apellido'],
+                    'segundo_apellido' => $_POST['segundo_apellido'] ?? '',
+                    'fecha_nacimiento' => $_POST['fecha_nacimiento'],
+                    'celular' => $_POST['celular'] ?? '',
+                    'telefono' => $_POST['telefono'] ?? '',
+                    'correo_personal' => $_POST['correo_personal'] ?? '',
+                    'tipo_sangre_nombre' => $tipo_sangre_sync,
+                    'fecha_ingreso' => $_POST['fecha_ingreso'] ?? date('Y-m-d'),
+                    'foto' => $nombre_foto
+                ], isset($_POST['estado_laboral']) ? 'ACTIVO' : 'INACTIVO');
+            } elseif ($era_chofer) {
+                desactivarChoferDeEmpleado($pdo, $id_empleado, $_POST['cedula'] ?? $emp['cedula']);
             }
         }
 
@@ -470,11 +531,18 @@ if (isset($_GET['success'])) {
             <div class="form-group">
                 <label>Cargo Operativo o Jerárquico <span class="required">*</span></label>
                 <select name="id_cargo" id="id_cargo" required>
-                    <option value="">-- Seleccione Jefatura Primero --</option>
+                    <option value="">-- Seleccione Dirección/Jefatura o el cargo Chofer --</option>
                     <?php foreach($cargos as $crg): ?>
-                        <option value="<?= $crg['id_cargo'] ?>" <?= $emp['id_cargo'] == $crg['id_cargo'] ? 'selected' : '' ?>><?= htmlspecialchars($crg['nombre']) ?></option>
+                        <option
+                            value="<?= (int)$crg['id_cargo'] ?>"
+                            data-es-chofer="<?= esCargoChofer($crg['nombre']) ? '1' : '0' ?>"
+                            <?= $emp['id_cargo'] == $crg['id_cargo'] ? 'selected' : '' ?>
+                        ><?= htmlspecialchars($crg['nombre']) ?></option>
                     <?php endforeach; ?>
                 </select>
+                <small id="ayudaCargo" style="display:block; margin-top:5px; color:#4a5568;">
+                    Para un Chofer no se asigna Dirección ni Jefatura; el vehículo definirá su área institucional.
+                </small>
             </div>
             <div class="form-group">
                 <label>Tipo de Nombramiento <span class="required">*</span></label>
@@ -525,18 +593,57 @@ if (isset($_GET['success'])) {
 </div>
 
 <script>
-document.getElementById('id_direccion').addEventListener('change', function() {
-    var idDireccion = this.value;
-    var selectJefatura = document.getElementById('id_jefatura');
-    var selectCargo = document.getElementById('id_cargo');
+const selectDireccion = document.getElementById('id_direccion');
+const selectJefatura = document.getElementById('id_jefatura');
+const selectCargo = document.getElementById('id_cargo');
+const cargosGlobales = <?= json_encode(array_map(function ($cargo) {
+    return [
+        'id_cargo' => (int)$cargo['id_cargo'],
+        'nombre' => $cargo['nombre'],
+        'es_chofer' => esCargoChofer($cargo['nombre'])
+    ];
+}, $cargos_globales), JSON_UNESCAPED_UNICODE) ?>;
+
+function opcionesCargosGlobales(textoInicial = '-- Seleccione Dirección/Jefatura o el cargo Chofer --') {
+    let html = `<option value="">${textoInicial}</option>`;
+    cargosGlobales.forEach(item => {
+        html += `<option value="${item.id_cargo}" data-es-chofer="${item.es_chofer ? '1' : '0'}">${item.nombre}</option>`;
+    });
+    return html;
+}
+
+function aplicarLogicaCargo() {
+    const opcion = selectCargo.options[selectCargo.selectedIndex];
+    const esChofer = opcion && opcion.dataset.esChofer === '1';
+
+    if (esChofer) {
+        selectDireccion.value = '';
+        selectJefatura.innerHTML = '<option value="">No aplica para el cargo Chofer</option>';
+        selectDireccion.disabled = true;
+        selectJefatura.disabled = true;
+        selectDireccion.required = false;
+        selectJefatura.required = false;
+    } else {
+        selectDireccion.disabled = false;
+        selectJefatura.disabled = false;
+        selectDireccion.required = true;
+        selectJefatura.required = true;
+    }
+}
+
+selectCargo.addEventListener('change', aplicarLogicaCargo);
+
+selectDireccion.addEventListener('change', function() {
+    const idDireccion = this.value;
     selectJefatura.innerHTML = '<option value="">Cargando...</option>';
-    selectCargo.innerHTML = '<option value="">-- Seleccione Jefatura Primero --</option>';
-    
-    if(!idDireccion) {
+    selectCargo.innerHTML = opcionesCargosGlobales('-- Seleccione Jefatura o el cargo Chofer --');
+
+    if (!idDireccion) {
         selectJefatura.innerHTML = '<option value="">-- Seleccione Dirección Primero --</option>';
         return;
     }
-    fetch('get_ajax.php?tipo=jefaturas&id=' + idDireccion)
+
+    fetch('get_ajax.php?tipo=jefaturas&id=' + encodeURIComponent(idDireccion))
         .then(response => response.json())
         .then(data => {
             selectJefatura.innerHTML = '<option value="">-- Seleccione Jefatura --</option>';
@@ -546,24 +653,29 @@ document.getElementById('id_direccion').addEventListener('change', function() {
         });
 });
 
-document.getElementById('id_jefatura').addEventListener('change', function() {
-    var idJefatura = this.value;
-    var selectCargo = document.getElementById('id_cargo');
+selectJefatura.addEventListener('change', function() {
+    const idJefatura = this.value;
     selectCargo.innerHTML = '<option value="">Cargando...</option>';
-    
-    if(!idJefatura) {
-        selectCargo.innerHTML = '<option value="">-- Seleccione Jefatura Primero --</option>';
+
+    if (!idJefatura) {
+        selectCargo.innerHTML = opcionesCargosGlobales('-- Seleccione Jefatura o el cargo Chofer --');
         return;
     }
-    fetch('get_ajax.php?tipo=cargos&id=' + idJefatura)
+
+    fetch('get_ajax.php?tipo=cargos&id=' + encodeURIComponent(idJefatura))
         .then(response => response.json())
         .then(data => {
             selectCargo.innerHTML = '<option value="">-- Seleccione Cargo --</option>';
             data.forEach(item => {
-                selectCargo.innerHTML += `<option value="${item.id_cargo}">${item.nombre}</option>`;
+                const selected = Number(item.id_cargo) === Number(<?= (int)($emp['id_cargo'] ?? 0) ?>) ? ' selected' : '';
+                selectCargo.innerHTML += `<option value="${item.id_cargo}" data-es-chofer="${item.es_chofer ? '1' : '0'}"${selected}>${item.nombre}</option>`;
             });
+            aplicarLogicaCargo();
         });
 });
+
+// Aplicar el bloqueo al abrir la edición de un empleado que ya es Chofer.
+aplicarLogicaCargo();
 
 document.getElementById('id_provincia').addEventListener('change', function() {
     var idProv = this.value;

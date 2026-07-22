@@ -7,7 +7,8 @@ if (!isset($_SESSION['usuario'])) {
     exit;
 }
 
-require_once __DIR__ . '/../includes/conexion.php'; 
+require_once __DIR__ . '/../includes/conexion.php';
+require_once __DIR__ . '/funciones_chofer.php';
 
 $mensaje = "";
 
@@ -21,6 +22,13 @@ try {
     
     $provincias = $pdo->query("SELECT id_provincia, nombre FROM provincias ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
     $direcciones = $pdo->query("SELECT id_direccion, nombre FROM direcciones WHERE estado = 'ACTIVO' ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
+    $cargos_globales = $pdo->query("
+        SELECT id_cargo, nombre
+        FROM cargos
+        WHERE id_jefatura IS NULL
+          AND UPPER(COALESCE(estado, 'ACTIVO')) = 'ACTIVO'
+        ORDER BY nombre
+    ")->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (Exception $e) {
     $mensaje = "<div class='alert error'>Error crítico al cargar componentes: " . $e->getMessage() . "</div>";
@@ -95,9 +103,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         // --- PASO 5: Historial Laboral y Sincronización Estructural ---
         if (!empty($_POST['id_cargo'])) {
-            $id_cargo = (int)$_POST['id_cargo'];
-            $id_direccion = (int)$_POST['id_direccion'];
-            $id_jefatura = (int)$_POST['id_jefatura'];
+            $id_cargo = (int)($_POST['id_cargo'] ?? 0);
+            $cargo_info = obtenerCargoPorId($pdo, $id_cargo);
+            if (!$cargo_info) {
+                throw new Exception('El cargo seleccionado no existe o está inactivo.');
+            }
+
+            $nombre_cargo_upper = normalizarTextoCargo($cargo_info['nombre']);
+            $es_chofer = esCargoChofer($cargo_info['nombre']);
+            $id_direccion = $es_chofer ? 0 : (int)($_POST['id_direccion'] ?? 0);
+            $id_jefatura = $es_chofer ? 0 : (int)($_POST['id_jefatura'] ?? 0);
+
+            if (!$es_chofer && ($id_direccion <= 0 || $id_jefatura <= 0)) {
+                throw new Exception('Debe seleccionar la Dirección y la Jefatura para el cargo elegido.');
+            }
 
             // Insertar el puesto inicial activo en el historial general
             $sql_hist = "INSERT INTO historial_laboral (id_empleado, id_cargo, id_tipo_nombramiento, fecha_inicio, activo) 
@@ -107,11 +126,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             ]);
 
             // --- PASO 5.2: ASIGNACIÓN DE MANDOS AUTOMÁTICOS ---
-            $stmt_chk = $pdo->prepare("SELECT nombre FROM cargos WHERE id_cargo = ?");
-            $stmt_chk->execute([$id_cargo]);
-            $cargo_info = $stmt_chk->fetch(PDO::FETCH_ASSOC);
-            $nombre_cargo_upper = strtoupper($cargo_info['nombre'] ?? '');
-
             // ===============================
             // ASIGNAR DIRECTOR (Cubre DIRECTOR y DIRECTORA)
             // ===============================
@@ -149,9 +163,25 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             // ===============================
             // ASIGNAR CHOFER (Cubre CHOFER y CONDUCTOR)
             // ===============================
-            else if (strpos($nombre_cargo_upper, 'CHOFER') !== false || strpos($nombre_cargo_upper, 'CONDUCTOR') !== false) {
-                $sql_chofer = "INSERT INTO choferes (id_empleado, estado, fecha_inicio) VALUES (?, 'ACTIVO', CURRENT_DATE)";
-                $pdo->prepare($sql_chofer)->execute([$id_empleado]);
+            else if ($es_chofer) {
+                $stmt_sangre = $pdo->prepare("SELECT nombre FROM tipos_sangre WHERE id_tipo_sangre = ?");
+                $stmt_sangre->execute([!empty($_POST['id_tipo_sangre']) ? (int)$_POST['id_tipo_sangre'] : 0]);
+                $tipo_sangre_nombre = $stmt_sangre->fetchColumn() ?: null;
+
+                sincronizarChoferDesdeEmpleado($pdo, $id_empleado, [
+                    'cedula' => $_POST['cedula'],
+                    'primer_nombre' => $_POST['primer_nombre'],
+                    'segundo_nombre' => $_POST['segundo_nombre'] ?? '',
+                    'primer_apellido' => $_POST['primer_apellido'],
+                    'segundo_apellido' => $_POST['segundo_apellido'] ?? '',
+                    'fecha_nacimiento' => $_POST['fecha_nacimiento'],
+                    'celular' => $_POST['celular'] ?? '',
+                    'telefono' => $_POST['telefono'] ?? '',
+                    'correo_personal' => $_POST['correo_personal'] ?? '',
+                    'tipo_sangre_nombre' => $tipo_sangre_nombre,
+                    'fecha_ingreso' => $_POST['fecha_ingreso'] ?? date('Y-m-d'),
+                    'foto' => $nombre_foto
+                ], isset($_POST['estado_laboral']) ? 'ACTIVO' : 'INACTIVO');
             }
         }
 
@@ -358,8 +388,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <div class="form-group">
                 <label>Cargo Operativo o Jerárquico <span class="required">*</span></label>
                 <select name="id_cargo" id="id_cargo" required>
-                    <option value="">-- Seleccione Jefatura Primero --</option>
+                    <option value="">-- Seleccione Dirección/Jefatura o el cargo Chofer --</option>
+                    <?php foreach ($cargos_globales as $cargo_global): ?>
+                        <option
+                            value="<?= (int)$cargo_global['id_cargo'] ?>"
+                            data-es-chofer="<?= esCargoChofer($cargo_global['nombre']) ? '1' : '0' ?>"
+                        ><?= htmlspecialchars($cargo_global['nombre']) ?></option>
+                    <?php endforeach; ?>
                 </select>
+                <small id="ayudaCargo" style="display:block; margin-top:5px; color:#4a5568;">
+                    Para un Chofer no se asigna Dirección ni Jefatura; el vehículo definirá su área institucional.
+                </small>
             </div>
             <div class="form-group">
                 <label>Tipo de Nombramiento <span class="required">*</span></label>
@@ -411,18 +450,57 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 <script>
 // Lógica AJAX unificada para encadenamiento estructural de selects
-document.getElementById('id_direccion').addEventListener('change', function() {
-    var idDireccion = this.value;
-    var selectJefatura = document.getElementById('id_jefatura');
-    var selectCargo = document.getElementById('id_cargo');
+const selectDireccion = document.getElementById('id_direccion');
+const selectJefatura = document.getElementById('id_jefatura');
+const selectCargo = document.getElementById('id_cargo');
+const cargosGlobales = <?= json_encode(array_map(function ($cargo) {
+    return [
+        'id_cargo' => (int)$cargo['id_cargo'],
+        'nombre' => $cargo['nombre'],
+        'es_chofer' => esCargoChofer($cargo['nombre'])
+    ];
+}, $cargos_globales), JSON_UNESCAPED_UNICODE) ?>;
+
+function opcionesCargosGlobales(textoInicial = '-- Seleccione Dirección/Jefatura o el cargo Chofer --') {
+    let html = `<option value="">${textoInicial}</option>`;
+    cargosGlobales.forEach(item => {
+        html += `<option value="${item.id_cargo}" data-es-chofer="${item.es_chofer ? '1' : '0'}">${item.nombre}</option>`;
+    });
+    return html;
+}
+
+function aplicarLogicaCargo() {
+    const opcion = selectCargo.options[selectCargo.selectedIndex];
+    const esChofer = opcion && opcion.dataset.esChofer === '1';
+
+    if (esChofer) {
+        selectDireccion.value = '';
+        selectJefatura.innerHTML = '<option value="">No aplica para el cargo Chofer</option>';
+        selectDireccion.disabled = true;
+        selectJefatura.disabled = true;
+        selectDireccion.required = false;
+        selectJefatura.required = false;
+    } else {
+        selectDireccion.disabled = false;
+        selectJefatura.disabled = false;
+        selectDireccion.required = true;
+        selectJefatura.required = true;
+    }
+}
+
+selectCargo.addEventListener('change', aplicarLogicaCargo);
+
+selectDireccion.addEventListener('change', function() {
+    const idDireccion = this.value;
     selectJefatura.innerHTML = '<option value="">Cargando...</option>';
-    selectCargo.innerHTML = '<option value="">-- Seleccione Jefatura Primero --</option>';
-    
-    if(!idDireccion) {
+    selectCargo.innerHTML = opcionesCargosGlobales('-- Seleccione Jefatura o el cargo Chofer --');
+
+    if (!idDireccion) {
         selectJefatura.innerHTML = '<option value="">-- Seleccione Dirección Primero --</option>';
         return;
     }
-    fetch('get_ajax.php?tipo=jefaturas&id=' + idDireccion)
+
+    fetch('get_ajax.php?tipo=jefaturas&id=' + encodeURIComponent(idDireccion))
         .then(response => response.json())
         .then(data => {
             selectJefatura.innerHTML = '<option value="">-- Seleccione Jefatura --</option>';
@@ -432,21 +510,21 @@ document.getElementById('id_direccion').addEventListener('change', function() {
         });
 });
 
-document.getElementById('id_jefatura').addEventListener('change', function() {
-    var idJefatura = this.value;
-    var selectCargo = document.getElementById('id_cargo');
+selectJefatura.addEventListener('change', function() {
+    const idJefatura = this.value;
     selectCargo.innerHTML = '<option value="">Cargando...</option>';
-    
-    if(!idJefatura) {
-        selectCargo.innerHTML = '<option value="">-- Seleccione Jefatura Primero --</option>';
+
+    if (!idJefatura) {
+        selectCargo.innerHTML = opcionesCargosGlobales('-- Seleccione Jefatura o el cargo Chofer --');
         return;
     }
-    fetch('get_ajax.php?tipo=cargos&id=' + idJefatura)
+
+    fetch('get_ajax.php?tipo=cargos&id=' + encodeURIComponent(idJefatura))
         .then(response => response.json())
         .then(data => {
             selectCargo.innerHTML = '<option value="">-- Seleccione Cargo --</option>';
             data.forEach(item => {
-                selectCargo.innerHTML += `<option value="${item.id_cargo}">${item.nombre}</option>`;
+                selectCargo.innerHTML += `<option value="${item.id_cargo}" data-es-chofer="${item.es_chofer ? '1' : '0'}">${item.nombre}</option>`;
             });
         });
 });

@@ -50,9 +50,24 @@ try {
 
         // 4. CARGAR CARGOS SEGÚN LA JEFATURA
         case 'cargos':
-            // Agregamos filtro de estado opcional si tu tabla cargos maneja vigencia, 
-            // garantizando la consistencia con el formulario de creación.
-            $stmt = $pdo->prepare("SELECT id_cargo, nombre FROM cargos WHERE id_jefatura = ? ORDER BY nombre");
+            // Los cargos de la jefatura se combinan con cargos globales, como CHOFER.
+            $stmt = $pdo->prepare("
+                SELECT
+                    id_cargo,
+                    nombre,
+                    CASE
+                        WHEN UPPER(nombre) LIKE '%CHOFER%'
+                          OR UPPER(nombre) LIKE '%CONDUCTOR%'
+                        THEN TRUE
+                        ELSE FALSE
+                    END AS es_chofer
+                FROM cargos
+                WHERE UPPER(COALESCE(estado, 'ACTIVO')) = 'ACTIVO'
+                  AND (id_jefatura = ? OR id_jefatura IS NULL)
+                ORDER BY
+                    CASE WHEN id_jefatura IS NULL THEN 0 ELSE 1 END,
+                    nombre
+            ");
             $stmt->execute([$id]);
             $resultados = $stmt->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode($resultados);
